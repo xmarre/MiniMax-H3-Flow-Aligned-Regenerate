@@ -1,6 +1,4 @@
-import hashlib
 import importlib.util
-import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,31 +53,8 @@ def test_custom_node_root_registration_smoke(capsys):
     assert "H3RefineTargetGeometry" in module.NODE_CLASS_MAPPINGS
     assert "H3RuntimeMetricsProbe" in module.NODE_CLASS_MAPPINGS
     assert "H3FlowLocalBoundaryAudit" in module.NODE_CLASS_MAPPINGS
-    lines = capsys.readouterr().out.splitlines()
-    receipt = json.loads(next(line.split("=", 1)[1] for line in lines if "[H3 Flow] diagnostic_sources=" in line))
-    package = root.parent / "h3_flow_regenerate"
-    assert receipt["policy"] == "h3_flow_low_trace_sources_v1"
-    assert receipt["package_path"] == str(package.resolve())
-    assert set(receipt["sources"]) == {
-        "low_sampler_trace.py",
-        "runtime.py",
-        "partitioned_scheduler.py",
-        "low_sampler_ab_audit.py",
-        "native_execution_trace.py",
-        "partitioned_transformer.py",
-        "partitioned_node.py",
-    }
-    for name, info in receipt["sources"].items():
-        assert info == {"sha256": hashlib.sha256((package / name).read_bytes()).hexdigest()}
-
-
-def test_deployment_receipt_marks_unreadable_sources_without_blocking_registration(monkeypatch, tmp_path, capsys):
-    from h3_flow_regenerate import deployment
-
-    monkeypatch.setattr(deployment, "__file__", str(tmp_path / "deployment.py"))
-    receipt = deployment.report_diagnostic_sources()
-    assert all(info == {"unobserved": "FileNotFoundError"} for info in receipt["sources"].values())
-    assert json.loads(capsys.readouterr().out.split("=", 1)[1]) == receipt
+    assert "H3NativeSourceContinuationHandoff" in module.NODE_CLASS_MAPPINGS
+    assert "diagnostic_sources=" not in capsys.readouterr().out
 
 
 def test_progressive_nodes_expose_all_selectable_guidance_controls():

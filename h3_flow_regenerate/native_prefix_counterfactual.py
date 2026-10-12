@@ -311,6 +311,7 @@ def audit_native_prefix_counterfactual(
 
 
 class H3NativePrefixCounterfactual:
+    DEPRECATED = True
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -336,7 +337,7 @@ class H3NativePrefixCounterfactual:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("numerical_report",)
     FUNCTION = "audit"
-    CATEGORY = "MiniMax H3/diagnostics"
+    CATEGORY = "MiniMax H3/diagnostics/legacy"
     OUTPUT_NODE = True
     DESCRIPTION = "Decoder-only paired prefix intervention using the saved native source suffix; no sampling."
 

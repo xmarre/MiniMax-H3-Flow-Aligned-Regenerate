@@ -399,6 +399,7 @@ def audit_prefix_projection(vae, bundle_path, join_frame, process_out, *, rois, 
 
 
 class H3FlowPrefixProjectionAudit:
+    DEPRECATED = True
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -418,7 +419,7 @@ class H3FlowPrefixProjectionAudit:
     RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "STRING")
     RETURN_NAMES = ("rgb_reference", "latent_bicubic", "vae_rgb_roundtrip", "numerical_report")
     FUNCTION = "audit"
-    CATEGORY = "MiniMax H3/diagnostics"
+    CATEGORY = "MiniMax H3/diagnostics/legacy"
     OUTPUT_NODE = True
     DESCRIPTION = (
         "Paired VAE-only source-prefix A/B from an existing uniform-source witness. "

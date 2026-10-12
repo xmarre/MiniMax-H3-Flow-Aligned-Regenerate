@@ -1402,56 +1402,10 @@ def partitioned_diffusion_wrapper(
                 block_index=layer,
             )
             block_extra = extra if sol_attention_selected(options) else partitioned_block_extra(extra)
-            from .low_sampler_trace import active_trace
-
-            trace = active_trace()
-            observer = trace.native_execution if trace is not None else None
-            if observer is not None:
-                observer.observe(
-                    trace,
-                    layer,
-                    len(inner.blocks),
-                    "input",
-                    img,
-                    inner.blocks[layer],
-                    forwarded["transformer_options"],
-                    previous,
-                )
-                observer.observe_sparse_inputs(
-                    trace,
-                    layer,
-                    len(inner.blocks),
-                    inner.blocks[layer],
-                    forwarded["transformer_options"],
-                    previous,
-                    forwarded.get("rope_freqs"),
-                )
-            if observer is not None:
-                with observer.internal_block_hooks(
-                    trace,
-                    layer,
-                    len(inner.blocks),
-                    inner.blocks[layer],
-                    forwarded["transformer_options"],
-                    previous,
-                ):
-                    output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
-            else:
-                output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
+            output = previous(forwarded, block_extra) if previous else block_extra["original_block"](forwarded)
             result = output["img"]
             if result.shape != img.shape:
                 raise RuntimeError("partitioned exact-prefix transformer returned incompatible hidden state")
-            if observer is not None:
-                observer.observe(
-                    trace,
-                    layer,
-                    len(inner.blocks),
-                    "output",
-                    result,
-                    inner.blocks[layer],
-                    forwarded["transformer_options"],
-                    previous,
-                )
             if layer == len(inner.blocks) - 1:
                 if band is None:
                     # Prefix transformer outputs are context-only.  Native low-grid

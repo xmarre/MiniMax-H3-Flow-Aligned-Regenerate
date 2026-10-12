@@ -216,6 +216,7 @@ def audit_saved_low_aba(
 
 
 class H3FrozenLowABAudit:
+    DEPRECATED = True
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -236,7 +237,7 @@ class H3FrozenLowABAudit:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("numerical_report",)
     FUNCTION = "audit"
-    CATEGORY = "MiniMax H3/diagnostics"
+    CATEGORY = "MiniMax H3/diagnostics/legacy"
     OUTPUT_NODE = True
     DESCRIPTION = "Read-only native VAE analysis of actual frozen low-sampler A/B/A generated suffixes."
 

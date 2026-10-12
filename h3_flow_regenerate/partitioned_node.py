@@ -8,7 +8,7 @@ from .boundary_witness import WITNESS_DIRECTORY_OPTION
 from .comfy_compat import _put_wrapper_first, patch_flow_model
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveTargetInputConfig
-from .low_sampler_ab import LOW_SAMPLER_AB_KEY
+from .legacy_diagnostics import retire_low_replay_controls
 from .metrics import H3FlowMetrics
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
 from .partitioned_attention import sol_attention_selected
@@ -699,13 +699,26 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        for name in (
+            "low_sampler_aba",
+            "low_native_trace_step",
+            "low_native_trace_pair_block",
+            "low_native_trace_module_detail",
+            "low_native_trace_projection_detail",
+            "low_native_trace_qkv_detail",
+            "low_native_trace_token_admission",
+        ):
+            spec["required"][name][1]["tooltip"] = (
+                "Retired compatibility field. Saved values are retained, but live replay and kernel observation "
+                "no longer execute. Saved diagnostic bundles remain readable."
+            )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
     DESCRIPTION = (
         "Continuum handoff with exact caller-visible prefix restoration for the coordinated "
-        "VDN-H3-Plus stack using the selected attention backend. Continuation defaults to target-grid "
-        "low/probe and identity "
+        "VDN-H3-Plus stack using the selected attention backend. Continuation defaults to uniform reduced-grid "
+        "low/probe and learned "
         "handoff; all-generated first chunks retain learned progressive transfer. Preserves "
         "coherent exact audio input/timestep/velocity masks, and exact "
         "caller-visible prefix restoration. Advanced selectors remain available for controlled comparisons."
@@ -762,43 +775,6 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         low_native_trace_qkv_detail=False,
         low_native_trace_token_admission=False,
     ):
-        from .native_execution_trace import MODULE_OPTION as NATIVE_MODULE_OPTION
-        from .native_execution_trace import OPTION as NATIVE_TRACE_OPTION
-        from .native_execution_trace import PAIR_OPTION as NATIVE_PAIR_OPTION
-        from .native_execution_trace import PROJECTION_OPTION as NATIVE_PROJECTION_OPTION
-        from .native_execution_trace import QKV_OPTION as NATIVE_QKV_OPTION
-        from .native_execution_trace import TOKEN_OPTION as NATIVE_TOKEN_OPTION
-        from .native_execution_trace import (
-            validate_module_detail,
-            validate_pair_block,
-            validate_projection_detail,
-            validate_qkv_detail,
-            validate_step,
-            validate_token_detail,
-        )
-
-        validate_step(low_native_trace_step)
-        validate_pair_block(low_native_trace_pair_block)
-        validate_module_detail(low_native_trace_module_detail)
-        validate_projection_detail(low_native_trace_projection_detail)
-        validate_qkv_detail(low_native_trace_qkv_detail)
-        validate_token_detail(low_native_trace_token_admission)
-        if low_native_trace_token_admission and (
-            not low_sampler_aba or low_native_trace_step < 0 or low_native_trace_pair_block < 0
-        ):
-            raise ValueError("low_native_trace_token_admission requires replay, native step and pair block")
-        if low_native_trace_qkv_detail and not (low_native_trace_module_detail and low_native_trace_projection_detail):
-            raise ValueError("low_native_trace_qkv_detail requires module and projection detail")
-        if low_native_trace_projection_detail and not low_native_trace_module_detail:
-            raise ValueError("low_native_trace_projection_detail requires low_native_trace_module_detail=true")
-        if low_native_trace_step >= 0 and not low_sampler_aba:
-            raise ValueError("low_native_trace_step requires low_sampler_aba=true")
-        if low_native_trace_pair_block >= 0 and (not low_sampler_aba or low_native_trace_step < 0):
-            raise ValueError("low_native_trace_pair_block requires low_sampler_aba=true and low_native_trace_step>=0")
-        if low_native_trace_module_detail and (
-            not low_sampler_aba or low_native_trace_step < 0 or low_native_trace_pair_block < 0
-        ):
-            raise ValueError("low_native_trace_module_detail requires replay, native step and pair block")
         patched, metrics = super().patch(
             model=model,
             trajectory=trajectory,
@@ -819,16 +795,6 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             frame_gauge_repair=frame_gauge_repair,
             frame_gauge_residual_mode=frame_gauge_residual_mode,
         )
-        if low_sampler_aba and (
-            source_prefix_projection != "native_source_carry"
-            or spatial_stage_control != PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE
-            or not capture_boundary_witness
-            or trajectory is None
-        ):
-            raise ValueError(
-                "low_sampler_aba requires native_source_carry, progressive_uniform_source, "
-                "capture_boundary_witness=true and a connected Flow trajectory"
-            )
         configure_source_prefix_projection(patched, source_prefix_projection, video_vae, spatial_stage_control)
         witness_directory = ""
         if capture_boundary_witness:
@@ -877,19 +843,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             target_band_context=target_band_context,
             uniform_source_detail_transport=uniform_source_detail_transport,
         )
-        patched.model_options[LOW_SAMPLER_AB_KEY] = bool(low_sampler_aba)
-        patched.model_options[NATIVE_TRACE_OPTION] = low_native_trace_step
-        patched.model_options[NATIVE_PAIR_OPTION] = low_native_trace_pair_block
-        patched.model_options[NATIVE_MODULE_OPTION] = low_native_trace_module_detail
-        patched.model_options[NATIVE_PROJECTION_OPTION] = low_native_trace_projection_detail
-        patched.model_options[NATIVE_QKV_OPTION] = low_native_trace_qkv_detail
-        patched.model_options[NATIVE_TOKEN_OPTION] = low_native_trace_token_admission
-        metrics.event(
-            "partitioned_low_sampler_aba_control",
-            enabled=bool(low_sampler_aba),
-            source_projection=source_prefix_projection,
-            diagnostic_only=True,
-            default_changed=False,
+        retire_low_replay_controls(
+            patched,
+            metrics,
+            low_sampler_aba=low_sampler_aba,
             low_native_trace_step=low_native_trace_step,
             low_native_trace_pair_block=low_native_trace_pair_block,
             low_native_trace_module_detail=low_native_trace_module_detail,
@@ -900,13 +857,101 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         return patched, metrics
 
 
+class H3NativeSourceContinuationHandoff(H3PartitionedExactPrefixDiagnosticHandoff):
+    """Production uniform-source continuation with paired native source context."""
+
+    CATEGORY = "MiniMax H3/flow regenerate"
+    DESCRIPTION = (
+        "Progressive H3 continuation with one uniform source trajectory, learned transfer, "
+        "and exact protected video/audio. Native source carry pairs the preceding source "
+        "prediction with its returned target suffix. Run the complete sequence with the "
+        "same patched MODEL. Residual darkening can remain; camera motion and focus follow "
+        "the model's conditioning."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        spec = copy.deepcopy(H3PartitionedExactPrefixHandoff.INPUT_TYPES())
+        legacy = H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()
+        for name in ("audio_guided_overlap_mode", "audio_guided_overlap_ticks", "uniform_source_detail_transport"):
+            spec["required"][name] = copy.deepcopy(legacy["required"][name])
+        spec["required"]["source_prefix_projection"] = (
+            ["native_source_carry", "latent_bicubic"],
+            {
+                "default": "native_source_carry",
+                "tooltip": (
+                    "Native carry reuses the preceding source prediction, paired by the returned target suffix. "
+                    "The complete sequence must use this same MODEL. Latent bicubic reconstructs the "
+                    "source prefix from the target prefix. Neither mode modifies protected target bytes."
+                ),
+            },
+        )
+        spec["optional"]["capture_boundary_witness"] = copy.deepcopy(legacy["required"]["capture_boundary_witness"])
+        return spec
+
+    def patch(
+        self,
+        model,
+        trajectory,
+        source_mode,
+        source_scale,
+        source_width,
+        source_height,
+        handoff_coordinate,
+        handoff_selection,
+        guidance_mode,
+        direction_weight,
+        acceleration_weight,
+        consistency_weight,
+        low_frequency_cutoff,
+        learned_upscaler,
+        audio_guided_overlap_mode,
+        audio_guided_overlap_ticks,
+        uniform_source_detail_transport,
+        source_prefix_projection="native_source_carry",
+        metrics=None,
+        temporal_weight=0.20,
+        capture_boundary_witness=False,
+    ):
+        if source_prefix_projection not in ("native_source_carry", "latent_bicubic"):
+            raise ValueError("native source continuation supports native_source_carry or latent_bicubic")
+        return super().patch(
+            model=model,
+            trajectory=trajectory,
+            source_mode=source_mode,
+            source_scale=source_scale,
+            source_width=source_width,
+            source_height=source_height,
+            handoff_coordinate=handoff_coordinate,
+            handoff_selection=handoff_selection,
+            guidance_mode=guidance_mode,
+            direction_weight=direction_weight,
+            acceleration_weight=acceleration_weight,
+            consistency_weight=consistency_weight,
+            low_frequency_cutoff=low_frequency_cutoff,
+            temporal_weight=temporal_weight,
+            learned_upscaler=learned_upscaler,
+            metrics=metrics,
+            vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+            prefix_transformer_context=PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+            source_prefix_projection=source_prefix_projection,
+            uniform_source_detail_transport=uniform_source_detail_transport,
+            capture_boundary_witness=capture_boundary_witness,
+        )
+
+
 NODE_CLASS_MAPPINGS = {
+    "H3NativeSourceContinuationHandoff": H3NativeSourceContinuationHandoff,
     "H3PartitionedExactPrefixHandoff": H3PartitionedExactPrefixHandoff,
     "H3PartitionedExactPrefixDiagnosticHandoff": H3PartitionedExactPrefixDiagnosticHandoff,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "H3NativeSourceContinuationHandoff": "MiniMax H3 Native Source Continuation",
     "H3PartitionedExactPrefixHandoff": "MiniMax H3 Partitioned Exact-Prefix Handoff [Compatibility]",
-    "H3PartitionedExactPrefixDiagnosticHandoff": "MiniMax H3 Partitioned Exact-Prefix Handoff",
+    "H3PartitionedExactPrefixDiagnosticHandoff": "MiniMax H3 Partitioned Exact-Prefix Handoff [Legacy Controls]",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
