@@ -7,6 +7,7 @@ frames. No sampler input, saved chunk, or audio tensor is changed.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 
 import torch
@@ -15,6 +16,20 @@ LOG = logging.getLogger(__name__)
 _CYCLE = 5
 _CYCLE_FRAMES = 17
 _PREFIX_REMAINDER = 2
+
+
+def video_latent_fingerprint(video: torch.Tensor) -> dict:
+    """Dtype-independent identity of a caller-domain video latent.
+
+    Values are hashed as contiguous CPU float32 so the same latent compares equal
+    whether it is held as float32 or was stored in a wider type on another device.
+    """
+    values = video.detach().to(device="cpu", dtype=torch.float32).contiguous()
+    return {
+        "sha256_float32": hashlib.sha256(values.numpy().tobytes()).hexdigest(),
+        "shape": list(values.shape),
+        "dtype": str(video.dtype).removeprefix("torch."),
+    }
 
 
 def _frames(tokens: int) -> int:
@@ -58,6 +73,7 @@ def prepare_decode_context(latents: list[dict], plan: dict) -> tuple[list[dict],
             raise ValueError(f"decode group {index + 1} has stale assembly metadata")
         videos.append(video)
 
+    fingerprints = [video_latent_fingerprint(video) for video in videos]
     output = list(latents)
     reports = []
     joined = 0
@@ -87,7 +103,14 @@ def prepare_decode_context(latents: list[dict], plan: dict) -> tuple[list[dict],
         reports.append(f"boundary {index + 1}: supplied 5 real future latents (17 decode-only frames)")
     report = (
         f"H3 Continuum decode context: {joined}/{max(0, len(videos) - 1)} exact boundaries. "
-        "Use the original assembly plan; added frames are trimmed by Assemble.\n" + "\n".join(reports)
+        "Use the original assembly plan; added frames are trimmed by Assemble.\n"
+        + "\n".join(reports)
+        + "\n"
+        + "\n".join(
+            f"input group {index + 1}: sha256_float32={fingerprint['sha256_float32']} "
+            f"shape={fingerprint['shape']} dtype={fingerprint['dtype']}"
+            for index, fingerprint in enumerate(fingerprints)
+        )
     )
     LOG.info(
         "H3 Flow video decode-context receipt exact_boundaries=%d total_boundaries=%d "
@@ -97,6 +120,14 @@ def prepare_decode_context(latents: list[dict], plan: dict) -> tuple[list[dict],
         _CYCLE,
         reports,
     )
+    for index, fingerprint in enumerate(fingerprints):
+        LOG.info(
+            "H3 Flow video decode-input fingerprint group=%d sha256_float32=%s shape=%s dtype=%s",
+            index + 1,
+            fingerprint["sha256_float32"],
+            fingerprint["shape"],
+            fingerprint["dtype"],
+        )
     return output, report
 
 
@@ -124,5 +155,95 @@ class H3ContinuumDecodeContext:
         return prepare_decode_context(video_latents, assembly_plan[0])
 
 
-NODE_CLASS_MAPPINGS = {"H3ContinuumDecodeContext": H3ContinuumDecodeContext}
-NODE_DISPLAY_NAME_MAPPINGS = {"H3ContinuumDecodeContext": "MiniMax H3 Continuum Decode Context"}
+def probe_image_geometry(
+    images: torch.Tensor, *, join_frame: int, rois: dict, feature_tracking_enabled: bool = False
+) -> dict:
+    """Static-background texture and geometry of an in-graph IMAGE timeline.
+
+    Uses the Local Boundary Audit's ROI estimator on frames
+    ``join_frame - 16 .. join_frame + 15`` of the given timeline, labelled by
+    their index in it. The images are only read.
+    """
+    from .stage_static_roi_audit import measure_stage_static_rois
+
+    if not torch.is_tensor(images) or images.ndim != 4 or images.shape[-1] < 3:
+        raise ValueError("geometry probe expects an IMAGE tensor [frames,H,W,C]")
+    first = max(0, int(join_frame) - 16)
+    stop = min(int(images.shape[0]), int(join_frame) + 16)
+    if not first < join_frame < stop:
+        raise ValueError("geometry probe join frame is outside the image timeline")
+    window = images[first:stop, ..., :3].detach().to(device="cpu", dtype=torch.float32)
+    result = measure_stage_static_rois(
+        window,
+        list(range(first, stop)),
+        join_frame=int(join_frame),
+        rois=rois,
+    )
+    if feature_tracking_enabled:
+        from .feature_background_tracking import track_background_features
+
+        result["tracked_background_features"] = track_background_features(
+            window, list(range(first, stop)), join_frame=int(join_frame), rois=rois
+        )
+    return {
+        "policy": "h3_in_graph_image_geometry_probe_v1",
+        "frames_in_timeline": int(images.shape[0]),
+        "canvas_hw": [int(images.shape[1]), int(images.shape[2])],
+        "measured_frames": [first, stop - 1],
+        "images_modified": False,
+        **result,
+    }
+
+
+class H3ContinuumImageGeometryProbe:
+    CATEGORY = "MiniMax H3/flow regenerate"
+    DESCRIPTION = (
+        "Diagnostic. Measures static-background sharpness and position around a join on decoded or "
+        "assembled IMAGE frames inside the graph, before video encoding, with the Local Boundary "
+        "Audit's ROI estimator. Optional bidirectional feature tracking measures "
+        "cumulative movement that phase correlation may miss. Images pass through unchanged."
+    )
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("images", "report")
+    FUNCTION = "probe"
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "join_frame": ("INT", {"default": 175, "min": 1, "max": 100000}),
+                "static_roi_profile": (["01784_room", "custom"], {"default": "01784_room"}),
+                "static_roi_json": ("STRING", {"default": "", "multiline": True}),
+                "feature_tracking_enabled": ("BOOLEAN", {"default": True}),
+            }
+        }
+
+    def probe(self, images, join_frame, static_roi_profile, static_roi_json, feature_tracking_enabled=True):
+        import json
+
+        from .stage_static_roi_audit import parse_static_rois
+
+        rois = parse_static_rois(static_roi_profile, static_roi_json)
+        report = json.dumps(
+            probe_image_geometry(
+                images,
+                join_frame=int(join_frame),
+                rois=rois,
+                feature_tracking_enabled=feature_tracking_enabled,
+            ),
+            allow_nan=False,
+        )
+        LOG.info("H3 Flow image geometry probe %s", report)
+        return images, report
+
+
+NODE_CLASS_MAPPINGS = {
+    "H3ContinuumDecodeContext": H3ContinuumDecodeContext,
+    "H3ContinuumImageGeometryProbe": H3ContinuumImageGeometryProbe,
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "H3ContinuumDecodeContext": "MiniMax H3 Continuum Decode Context",
+    "H3ContinuumImageGeometryProbe": "MiniMax H3 Image Geometry Probe (diagnostic)",
+}
