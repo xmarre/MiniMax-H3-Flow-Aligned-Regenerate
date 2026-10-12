@@ -96,7 +96,7 @@
       "temporal_weight": 0.2,
       "audio_guided_overlap_mode": "sampler_mask_exact_timestep",
       "audio_guided_overlap_ticks": 16,
-      "uniform_source_detail_transport": false,
+      "uniform_source_detail_transport": true,
       "source_prefix_projection": "native_source_carry",
       "capture_boundary_witness": false
     },
@@ -234,7 +234,7 @@
   },
   "16": {
     "inputs": {
-      "filename_prefix": "video/MiniMax_H3_Flow_Progressive_Target_Input",
+      "filename_prefix": "MiniMax_H3_Flow_Native_Source",
       "format": "mp4",
       "codec": "h264",
       "codec.encoding": "auto",

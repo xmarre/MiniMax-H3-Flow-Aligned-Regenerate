@@ -660,6 +660,8 @@ def audit_local_boundary(
     static_rois = parse_static_rois(static_roi_profile, static_roi_json)
     if feature_tracking_enabled and not static_rois:
         raise ValueError("feature tracking requires static_roi_profile != off")
+    if feature_tracking_enabled and (type(join_frame) is not int or join_frame < 1):
+        raise ValueError("feature tracking requires a positive assembled chunk_join_frame")
     if validate_full_video_decoder and scope == "high_prediction_tone":
         raise ValueError("full-video decode validation requires stage_continuity or transfer_and_decoder_context")
     if static_rois and scope == "high_prediction_tone":
@@ -1140,6 +1142,7 @@ class H3FlowLocalBoundaryAudit:
                         "default": False,
                         "tooltip": (
                             "Optional OpenCV forward/backward feature tracking on final decoded replay. "
+                            "Requires named static ROIs and a positive assembled chunk_join_frame. "
                             "Measures cumulative background movement using RANSAC; read-only and slower."
                         ),
                     },

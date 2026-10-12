@@ -7,7 +7,7 @@ The project has two main approaches:
 1. **Flow-aligned two-pass guidance** — capture the low-resolution H3 denoising trajectory and use it to guide a later learned-upscale/refine pass.
 2. **Progressive handoff** — spend early H3 work on a smaller video grid, then switch to the target grid inside one sampling schedule.
 
-For Continuum exact-prefix continuation with VDN-H3-Plus, the production path is **MiniMax H3 Native Source Continuation**, using a uniform reduced-grid trajectory and paired native source context (see [Recommended continuation](#recommended-continuation-one-uniform-source-trajectory)). It supports the selected ComfyUI attention backend; Sol-H3 attention is optional. For general target-input workflows, use **MiniMax H3 Progressive Handoff (Target Input)**.
+**MiniMax H3 Native Source Continuation** is the recommended progressive-generation node for single chunks and Continuum sequences. Connect VDN-H3-Plus and the learned 3D upscaler. Without a protected prefix, it runs ordinary low/probe/high progressive sampling; Continuum Native Masked selects its exact-prefix continuation path. The selected ComfyUI attention backend is supported; Sol-H3 is optional. [Defaults and wiring](#recommended-generation-defaults).
 
 > This is an independent research implementation informed by public work. It does not reproduce MiniMax's closed H3-Regenerate-2K implementation or an unreleased sparse-attention model.
 
@@ -26,7 +26,7 @@ The core package has no mandatory sibling-node dependency. The intended learned-
 
 Loadable examples are under [`workflows/examples/`](workflows/examples/):
 
-- [`native-source-continuation.workflow.json`](workflows/examples/native-source-continuation.workflow.json) — the production continuation interface with native source carry, learned 3D transfer and exact protected audio/video;
+- [`native-source-continuation.workflow.json`](workflows/examples/native-source-continuation.workflow.json) — the recommended single-chunk and Continuum interface with native source carry, learned 3D transfer and exact protected audio/video;
 - [`progressive-target-input.workflow.json`](workflows/examples/progressive-target-input.workflow.json) — general target-input progressive control;
 - [`progressive-source-input.workflow.json`](workflows/examples/progressive-source-input.workflow.json) — source-input progressive control;
 - [`partitioned-exact-prefix.workflow.json`](workflows/examples/partitioned-exact-prefix.workflow.json) — the preserved legacy control layout for existing workflows.
@@ -41,15 +41,18 @@ The learned examples use the companion 3D provider with
 `minimax_h3_latent_upscaler_3d_bf16.safetensors`, CUDA, bf16 and
 `offload_after_upscale=false`. All examples use `res_multistep` without Turbo LoRA.
 VDN-H3-Plus partitioned transport is required; Sol-H3 attention is optional.
-The [coordinated release set](#coordinated-h3-release-set) lists the existing
-stable companions. Wiring overlays are specifications, not loadable workflows.
+The [coordinated release set](#coordinated-h3-release-set) lists companion versions. Wiring overlays are specifications, not loadable workflows.
 
-## Partitioned exact-prefix Continuum path
+## Recommended generation defaults
 
 Use **MiniMax H3 Native Source Continuation**
-(`H3NativeSourceContinuationHandoff`) with compatible Continuum, VDN-H3-Plus
-and the learned upscaler. Connect the patched MODEL to both scheduler and guider,
-and reuse it for the complete sequence.
+(`H3NativeSourceContinuationHandoff`) with VDN-H3-Plus and the learned upscaler.
+Connect the patched MODEL to both scheduler and guider. For a single chunk,
+previous source context is not required: the normal progressive path computes
+and retains the source prediction. For a Continuum Native Masked sequence,
+reuse the same patched MODEL for the initial chunk and every continuation.
+Native carry requires batch-one H3 video with native `5k+2` latent-token lengths,
+an even spatial grid and a target larger than the reduced source grid.
 
 ### Recommended continuation: one uniform source trajectory
 
@@ -68,27 +71,33 @@ unchanged. [Native carry contract](docs/NATIVE_SOURCE_PREFIX_CARRY.md).
 
 | Setting | New-node default |
 | --- | --- |
-| Source geometry | `scale`, `0.70` (explicit geometry: `864 × 640`) |
-| Handoff | `fixed`, `0.35` |
-| Guidance | `direction+temporal`, direction `0.25`, temporal `0.20` |
-| Source prefix | `native_source_carry` |
-| Audio mask | `sampler_mask_exact_timestep` (coherent exact mask) |
-| Stored audio overlap | `16`, zero effective release in exact mode |
-| Detail transport | `false`; existing explicit `true` remains supported |
-| Boundary witness capture | `false` |
+| `source_mode` | `scale` |
+| `source_scale` | `0.70` |
+| `source_width`, `source_height` | `864`, `640` (used in `pixels` mode) |
+| `handoff_coordinate`, `handoff_selection` | `0.35`, `fixed` |
+| `guidance_mode` | `direction+temporal` |
+| `direction_weight` | `0.25` |
+| `acceleration_weight`, `consistency_weight` | `0.25`, `0.25` (inactive in `direction+temporal`) |
+| `low_frequency_cutoff` | `0.25` |
+| `temporal_weight` | `0.20` |
+| `audio_guided_overlap_mode` | `sampler_mask_exact_timestep` (coherent exact mask) |
+| `audio_guided_overlap_ticks` | `16` (zero effective release in exact mode) |
+| `uniform_source_detail_transport` | `true` |
+| `source_prefix_projection` | `native_source_carry` |
+| `capture_boundary_witness` | `false` |
 
 `latent_bicubic` is available when paired native context is unsuitable. It
 reconstructs only the source prefix; the authoritative target prefix remains exact.
-Detail transport optionally adds the last-prefix exact-minus-learned latent
-residual before high refinement, with no additional model/provider/VAE call.
-It can affect suffix detail and should be judged on rendered output.
+Detail transport is enabled for new production nodes. It adds a last-prefix
+exact-minus-learned detail residual before high refinement only when its
+calibration and holdout checks pass. Otherwise it reports a skipped correction.
+It adds no H3, provider or VAE evaluation, but calibration uses compute and memory.
+It has no prefix to correct in an all-generated single chunk. Existing saved
+`false` values and legacy-node defaults remain unchanged.
 
-The user reports good continuation boundaries across multiple reference images
-and prompts. Slight darkening remains a known issue. Camera zoom and background
-blur can follow prompt, subject motion and focus changes; the existing fitted
-motion estimates do not establish an unwanted camera defect. No Spectrum cause
-for the darkening has been established. These observations do not guarantee
-quality or timing for every configuration.
+Slight continuation darkening remains a known issue. Output quality and camera
+or focus behavior depend on the model, prompts and references; the defaults do
+not guarantee seam quality or timing for every configuration.
 
 ### Compatibility and diagnostics
 
@@ -318,24 +327,20 @@ Target-Sparse remains useful for architectural experiments and controlled compar
 
 ## Coordinated H3 release set
 
-The stable set below predates the v0.3.12 candidate in PR #99. The candidate's
-upstream Kitchen correction and packaging are tracked in
-[release context](RELEASE_CONTEXT.md); pending fixes are not declared released.
-
-
-Flow-Aligned Regenerate is released together with the other H3 components.
-Per-version details are in [RELEASE_NOTES.md](RELEASE_NOTES.md).
+Flow v0.3.12 contains PR #99. The companion releases below are separate packages;
+use their documented capabilities together. See [release context](RELEASE_CONTEXT.md)
+for upstream patches that have not been released.
 
 | Component | Release | Included PRs |
 | --- | --- | --- |
-| Flow-Aligned Regenerate | [v0.3.11](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/releases/tag/v0.3.11) | [#97](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/97) |
+| Flow-Aligned Regenerate | [v0.3.12](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/releases/tag/v0.3.12) | [#99](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/99) |
 | Sol-H3 | [v0.1.10](https://github.com/xmarre/ComfyUI-Sol-H3/releases/tag/v0.1.10) | [#40](https://github.com/xmarre/ComfyUI-Sol-H3/pull/40) |
 | VDN-H3-Plus | [v1.5.9](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/releases/tag/v1.5.9) | [#39](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/39), [#40](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/40) |
 | H3 Continuum-Plus | [v3.4.6](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/releases/tag/v3.4.6) | unchanged |
 | Latent Upscaler-Plus | [v0.2.2](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus/releases/tag/v0.2.2) | unchanged |
 
-[Spectrum MiniMax H3 v0.2.28](https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3/releases/tag/v0.2.28)
-is the unchanged companion. Separate Keyless, audio-training and rejected
+[Spectrum MiniMax H3 v0.2.29](https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3/releases/tag/v0.2.29)
+includes [runtime compatibility PR #121](https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3/pull/121). Separate Keyless, audio-training and rejected
 decoded-geometry experiments are outside this release set.
 
 The tested Core adapter repair is

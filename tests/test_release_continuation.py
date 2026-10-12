@@ -98,3 +98,97 @@ def test_production_interface_excludes_live_experiments_and_mismatched_audio():
     )
     with pytest.raises(ValueError, match="coherent audio"):
         H3NativeSourceContinuationHandoff().patch(**kwargs)
+
+
+def test_production_defaults_match_release_profile_and_preserve_legacy_detail_default():
+    spec = H3NativeSourceContinuationHandoff.INPUT_TYPES()["required"]
+    defaults = {
+        "source_mode": "scale",
+        "source_scale": 0.70,
+        "source_width": 864,
+        "source_height": 640,
+        "handoff_coordinate": 0.35,
+        "handoff_selection": "fixed",
+        "guidance_mode": "direction+temporal",
+        "direction_weight": 0.25,
+        "acceleration_weight": 0.25,
+        "consistency_weight": 0.25,
+        "low_frequency_cutoff": 0.25,
+        "temporal_weight": 0.20,
+        "audio_guided_overlap_mode": "sampler_mask_exact_timestep",
+        "audio_guided_overlap_ticks": 16,
+        "uniform_source_detail_transport": True,
+        "source_prefix_projection": "native_source_carry",
+    }
+    assert {k: spec[k][1]["default"] for k in defaults} == defaults
+    assert (
+        H3NativeSourceContinuationHandoff.INPUT_TYPES()["optional"]["capture_boundary_witness"][1]["default"] is False
+    )
+    assert (
+        H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["required"]["uniform_source_detail_transport"][1][
+            "default"
+        ]
+        is False
+    )
+
+
+@pytest.mark.parametrize("mask_present", [False, True])
+def test_unprotected_single_chunk_routes_to_ordinary_progressive_runtime(monkeypatch, mask_present):
+    import torch
+
+    from h3_flow_regenerate import partitioned_outer as outer
+    from h3_flow_regenerate.geometry import pack_streams
+    from h3_flow_regenerate.handoff import ProgressiveTargetInputConfig
+    from h3_flow_regenerate.metrics import H3FlowMetrics
+    from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FlowBinding
+    from h3_flow_regenerate.source_prefix_carry import SourcePrefixCarry
+
+    provider = SimpleNamespace(
+        api_version=1,
+        kind="minimax_h3_learned_latent_upscaler",
+        model_name="fixture",
+        device="cpu",
+        precision="fp32",
+        offload_after_upscale=False,
+        upscale_clean_video=lambda *a, **k: None,
+    )
+    progressive = ProgressiveTargetInputConfig(source_scale=0.70, transfer_mode="learned_3d", learned_upscaler=provider)
+    owner = SourcePrefixCarry()
+    model_options = {
+        FLOW_BINDING_KEY: FlowBinding(metrics=H3FlowMetrics()),
+        outer.PARTITIONED_PROGRESSIVE_KEY: progressive,
+        SOURCE_PREFIX_CARRY_KEY: owner,
+    }
+    guider = SimpleNamespace(model_options=model_options)
+    video, audio = torch.zeros(1, 24, 7, 8, 12), torch.zeros(1, 32, 2, 12)
+    packed, shapes = pack_streams((video, audio))
+    mask = torch.ones_like(packed) if mask_present else None
+    marker = object()
+    received = []
+
+    def ordinary(*args, **kwargs):
+        received.append((args, kwargs))
+        assert args[0].class_obj.model_options is model_options
+        return marker
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("single-chunk request entered protected-prefix continuation")
+
+    monkeypatch.setattr(outer, "flow_outer_wrapper_with_exact_mask", ordinary)
+    monkeypatch.setattr(outer, "run_partitioned_progressive", forbidden)
+    args = (
+        SimpleNamespace(class_obj=guider),
+        torch.ones_like(packed),
+        packed,
+        object(),
+        torch.tensor([1.0, 0.0]),
+        mask,
+        object(),
+        True,
+        7,
+    )
+    assert outer.partitioned_outer_wrapper(*args, latent_shapes=shapes) is marker
+    assert len(received) == 1
+    assert all(a is b for a, b in zip(received[0][0], args, strict=True))
+    assert received[0][1]["latent_shapes"] is shapes
+    assert model_options[SOURCE_PREFIX_CARRY_KEY] is owner

@@ -72,9 +72,9 @@ jobs:
           git clone --filter=blob:none https://github.com/Comfy-Org/ComfyUI.git .contracts/ComfyMask
           git -C .contracts/ComfyMask checkout 421a1c245c682c04d4325ba365f40c834c66f5b0
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git .contracts/Spectrum
-          git -C .contracts/Spectrum checkout beb32dd210ef9e95520453107f158241d4f2ecf3
+          git -C .contracts/Spectrum checkout 806fe498d574a726fecb8818917f00a4b993fd77
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git .contracts/SpectrumHistory
-          git -C .contracts/SpectrumHistory checkout 5161f0457bc8c52535212d6783eee73f439e1537
+          git -C .contracts/SpectrumHistory checkout 806fe498d574a726fecb8818917f00a4b993fd77
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-H3-Continuum.git .contracts/Continuum
           git -C .contracts/Continuum checkout bf25353d8bec44afea22c89717c4301ce13c2036
           git clone --filter=blob:none https://github.com/xmarre/ComfyUI-DiffAid-Patches.git .contracts/DiffAid

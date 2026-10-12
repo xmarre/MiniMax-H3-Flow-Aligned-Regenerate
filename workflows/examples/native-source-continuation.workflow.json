@@ -332,7 +332,7 @@
         0.2,
         "sampler_mask_exact_timestep",
         16,
-        false,
+        true,
         "native_source_carry",
         false
       ],
@@ -697,7 +697,7 @@
         "Node name for S&R": "SaveVideo"
       },
       "widgets_values": [
-        "video/MiniMax_H3_Flow_Progressive_Target_Input",
+        "MiniMax_H3_Flow_Native_Source",
         "mp4",
         "h264"
       ]
@@ -722,9 +722,9 @@
         "Node name for S&R": "MarkdownNote"
       },
       "widgets_values": [
-        "Current target-input example: 0.70 source scale, fixed 0.35 handoff, direction+temporal guidance, and learned_3d transfer through the connected MiniMax H3 Latent Upscaler Provider (3D). The provider uses the bf16 checkpoint on CUDA at bf16 precision with offload disabled. Acceleration and consistency weights are staged at 0.25 but are inactive while guidance_mode is direction+temporal."
+        "# Native source generation\n\nRecommended progressive MiniMax H3 path for single chunks and Continuum Native Masked sequences. Connect VDN-H3-Plus and the learned 3D upscaler, and wire the patched MODEL to both scheduler and guider.\n\nWithout a protected prefix, generation uses ordinary low/probe/high learned transfer. For a sequence, reuse the same patched MODEL from the initial chunk through every continuation so native source carry can pair the preceding source prediction with the exact returned target suffix.\n\nDefaults: source scale 0.70, fixed handoff 0.35, direction+temporal guidance, native_source_carry, detail transport enabled, exact audio mask, witness capture disabled. Change loader filenames to match your installed models."
       ],
-      "title": "Flow-Aligned Progressive Target Input"
+      "title": "Native source generation example"
     }
   ],
   "links": [

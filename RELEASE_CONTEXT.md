@@ -1,35 +1,32 @@
-## v0.3.12 release candidate
+## Coordinated companion versions
 
-Flow PR [#99](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/99)
-prepares the native-source continuation interface and diagnostic cleanup.
-The qualified Kitchen overflow correction and relocatable packaging remain owned
-by [comfy-kitchen #242](https://github.com/Comfy-Org/comfy-kitchen/pull/242) and
-[#246](https://github.com/Comfy-Org/comfy-kitchen/pull/246). Complete their upstream
-qualification before declaring a coordinated release with those fixes.
-Slight continuation darkening remains a documented known issue.
+Flow v0.3.12 includes PR #99. The companion packages below are separate releases;
+install compatible versions together for the progressive H3 workflow.
 
-The stable coordinated set below predates this candidate and is preserved for
-users of v0.3.11; it does not claim that the pending Kitchen changes are released.
-
-## Coordinated release set
-
-Update the coordinated components together. Every release links this same
-version set and identifies its implementation PRs.
-
-| Component | Release | Included PRs |
+| Component | Release | Implementation PRs |
 | --- | --- | --- |
-| Flow-Aligned Regenerate | [v0.3.11](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/releases/tag/v0.3.11) | [#97](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/97) |
+| Flow-Aligned Regenerate | [v0.3.12](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/releases/tag/v0.3.12) | [#99](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/99) |
 | Sol-H3 | [v0.1.10](https://github.com/xmarre/ComfyUI-Sol-H3/releases/tag/v0.1.10) | [#40](https://github.com/xmarre/ComfyUI-Sol-H3/pull/40) |
 | VDN-H3-Plus | [v1.5.9](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/releases/tag/v1.5.9) | [#39](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/39), [#40](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/40) |
 | H3 Continuum-Plus | [v3.4.6](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/releases/tag/v3.4.6) | unchanged |
 | Latent Upscaler-Plus | [v0.2.2](https://github.com/xmarre/Comfyui_Minimax_h3_latent_Upscaler-Plus/releases/tag/v0.2.2) | unchanged |
+| Spectrum MiniMax H3 | [v0.2.29](https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3/releases/tag/v0.2.29) | [#121](https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3/pull/121) |
 
-[Spectrum MiniMax H3 v0.2.28](https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3/releases/tag/v0.2.28)
-is the unchanged companion. Separate Keyless, audio-training and rejected
-decoded-geometry experiments are outside this release set.
+Native Source Continuation requires VDN-H3-Plus and the learned 3D upscaler for
+single chunks and sequences. Continuum supplies the protected prefix for a
+sequence. Sol-H3 and Spectrum are optional.
 
-The tested Core adapter repair is
-[ComfyUI #16783](https://github.com/Comfy-Org/ComfyUI/pull/16783).
-For INT8 fused MLP runtime adapters, retain that ComfyUI Patcher PR overlay until
-the repair is available upstream. The independent Core #16720 optimization is
-not included in this release set.
+## Upstream patches
+
+For INT8 fused MLP runtime adapters, retain the
+[ComfyUI #16783](https://github.com/Comfy-Org/ComfyUI/pull/16783) Patcher overlay
+until that repair is available in the installed Core release.
+
+The comfy-kitchen overflow correction
+[#242](https://github.com/Comfy-Org/comfy-kitchen/pull/242) and
+packaging/interoperability work
+[#246](https://github.com/Comfy-Org/comfy-kitchen/pull/246) are separate upstream
+changes. They are not bundled in Flow v0.3.12 or declared included in the
+companion versions above. Installations using a provisional Kitchen build must
+retain that build until the required upstream correction is released.
+Separate Keyless and sampler experiments are outside this release.

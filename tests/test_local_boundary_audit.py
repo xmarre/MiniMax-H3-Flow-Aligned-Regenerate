@@ -1250,3 +1250,38 @@ def test_absolute_stage_pairs_include_join_and_do_not_normalize_tone_bias(bundle
     assert pair["frame_labels"] == list(range(170, 196))
     assert pair["luma_mean_change"] == pytest.approx([0.03] * 26, abs=1e-6)
     assert pair["regions"]["left"]["same_frame_measurements"]["175"]["luma_mean_change"] == pytest.approx(0.03)
+
+
+@pytest.mark.parametrize("scope", ["stage_continuity", "transfer_and_decoder_context", "full_stage_continuity"])
+@pytest.mark.parametrize("join", [0, -1, True, 175.0, "175", None])
+def test_feature_tracking_rejects_invalid_join_before_bundle_load_or_decode(monkeypatch, scope, join):
+    vae = FakeVAE()
+
+    def forbidden_load(*args, **kwargs):
+        pytest.fail("invalid feature-tracking join reached bundle loading")
+
+    monkeypatch.setattr(audit, "load_replay_operands", forbidden_load)
+    with pytest.raises(ValueError, match="positive assembled chunk_join_frame"):
+        audit.audit_local_boundary(
+            vae,
+            "unused",
+            join,
+            lambda x: x,
+            scope=scope,
+            feature_tracking_enabled=True,
+            static_roi_profile="custom",
+            static_roi_json='{"left":[0,0,0.5,1],"right":[0.5,0,1,1]}',
+        )
+    assert vae.inputs == []
+
+
+def test_relative_join_labels_remain_available_without_feature_tracking(bundle, monkeypatch):
+    directory, _, _ = bundle
+    monkeypatch.setattr(audit, "geometry_comparison", lambda a, b, labels: {"frames": labels})
+    vae = FakeVAE()
+    report = audit.audit_local_boundary(vae, directory, 0, lambda x: x)
+    assert vae.inputs
+    assert report["plan"]["join_frame"] == 0
+    absolute = audit.audit_local_boundary(FakeVAE(), directory, 175, lambda x: x)
+    for name, stage in report["stages"].items():
+        assert stage["frame_labels"] == [frame - 175 for frame in absolute["stages"][name]["frame_labels"]]

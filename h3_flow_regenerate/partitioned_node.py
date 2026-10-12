@@ -765,8 +765,9 @@ class H3NativeSourceContinuationHandoff(H3PartitionedExactPrefixDiagnosticHandof
     DEPRECATED = False
     CATEGORY = "MiniMax H3/flow regenerate"
     DESCRIPTION = (
-        "Progressive H3 continuation with one uniform source trajectory, learned transfer, "
-        "and exact protected video/audio. Native source carry pairs the preceding source "
+        "Recommended progressive H3 generation for single chunks and Continuum sequences. "
+        "Uses learned 3D transfer; continuation preserves exact protected video/audio. "
+        "Requires VDN-H3-Plus and the learned upscaler. Native source carry pairs the preceding source "
         "prediction with its returned target suffix. Run the complete sequence with the "
         "same patched MODEL."
     )
@@ -777,6 +778,7 @@ class H3NativeSourceContinuationHandoff(H3PartitionedExactPrefixDiagnosticHandof
         legacy = H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()
         for name in ("audio_guided_overlap_mode", "audio_guided_overlap_ticks", "uniform_source_detail_transport"):
             spec["required"][name] = copy.deepcopy(legacy["required"][name])
+        spec["required"]["uniform_source_detail_transport"][1]["default"] = True
         spec["required"]["audio_guided_overlap_mode"] = (
             ["sampler_mask_exact_timestep", "exact_mask", "sampler_mask"],
             {

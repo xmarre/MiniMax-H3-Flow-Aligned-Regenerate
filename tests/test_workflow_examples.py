@@ -349,3 +349,12 @@ def test_native_source_continuation_examples_match_registered_schema_and_model_w
     assert set(schema["required"]) <= set(prompt["inputs"])
     assert set(prompt["inputs"]) <= set(schema["required"]) | set(schema["optional"])
     assert prompt["inputs"]["source_prefix_projection"] == "native_source_carry"
+
+
+def test_native_source_output_prefix_is_distinct_and_matches_both_formats():
+    api = _load("native-source-continuation.api.json")
+    canvas = _load("native-source-continuation.workflow.json")
+    prefix = next(n for n in api.values() if n["class_type"] == "SaveVideo")["inputs"]["filename_prefix"]
+    target = _load("progressive-target-input.api.json")
+    assert prefix != next(n for n in target.values() if n["class_type"] == "SaveVideo")["inputs"]["filename_prefix"]
+    assert prefix == next(n for n in canvas["nodes"] if n["type"] == "SaveVideo")["widgets_values"][0]

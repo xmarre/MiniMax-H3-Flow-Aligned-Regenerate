@@ -1,19 +1,19 @@
 # Native source-prefix carry
 
 Native Source Continuation uses the preceding chunk's already-computed low/probe
-clean prediction as source context. The frozen low-model A/B/A comparison favored
-this policy over half-pixel latent reconstruction: the latter substantially
-softened its source decode. The user reports good boundaries across multiple
-reference images and prompts. Slight darkening remains unresolved, and fitted
-camera/focus changes are not established defects.
+clean prediction as source context. For a single all-generated chunk, ordinary
+progressive learned transfer computes
+this prediction without requiring prior context. Continuum Native Masked uses
+it for the next chunk only after exact target-suffix pairing. Slight continuation
+darkening remains a known issue; native carry does not guarantee a tone fix.
 
 ## Setup
 
-1. Use **MiniMax H3 Native Source Continuation** with Continuum Native Masked,
-   VDN-H3-Plus and the learned 3D upscaler.
+1. Use **MiniMax H3 Native Source Continuation** with VDN-H3-Plus and the learned
+   3D upscaler. Add Continuum Native Masked for a sequence.
 2. Generate the full sequence with the same patched MODEL, starting with the
-   initial chunk. Native carry is the new node's default. A cached initial chunk
-   from another model or input policy is insufficient.
+   initial chunk. Native carry and guarded detail transport are the new node's
+   defaults. A cached initial chunk from another model or input policy is insufficient.
 3. Preserve the authoritative returned target suffix when supplying the next
    prefix. No saved audit bundle or video VAE is a runtime input.
 4. Optional boundary capture saves source/stage operands for offline native-VAE
