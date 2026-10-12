@@ -1,3 +1,54 @@
+# Unreleased: experimental continuation controls
+
+Run 01770 still showed frame shift and darkening. Uniform continuation now
+retains the low trajectory's measured residual instead of replacing it with
+unrelated high-grid noise. Gaussian refinement uses the ordinary antialiased
+half-pixel image grid and constrains new innovation to its coarse nullspace.
+Deterministic model drift uses a separate constant-preserving image lift;
+stochastic samplers retain the complete measured residual. This adds no model
+calls and leaves the reduced-grid low stage, exact protected AV ownership and
+sampler schedule intact. Rendered acceptance and GPU timing are pending.
+Uniform learned-provider receipts now correctly report the checkpoint call.
+See [01770 evidence and candidate](docs/validation/CONTINUATION_01770_IMAGE_NOISE.md).
+
+
+Uniform continuation now keeps the initial chunk's image-grid resize and
+ordinary learned-upscaler path. Previously both uniform modes inherited the
+heterogeneous attention-coordinate projection and forced a different
+encoder-to-decoder interpolation from chunk 1. This changes the source prefix
+seen by low/probe and the learned transfer; at the tested 50x38 -> 72x54 geometry
+the two interpolation conventions differ by about 0.30 source latent cells
+on coordinate ramps. The correction adds no model calls and preserves the
+exact returned prefix, audio ownership and sampling schedule. It is a concrete
+representation correction, rejected as a sufficient tone/motion fix in 01770.
+See [image-lattice investigation](docs/validation/CONTINUATION_01769_IMAGE_LATTICE.md).
+
+`progressive_uniform_source_exact_context` adds unresampled prefix visual
+conditioning to low/probe through Core's native video-reference layout, while
+preserving one source-grid video recurrence. The reference occupies a separate
+time span; target audio, video and keyframes advance together. This changes their
+time relative to text and existing references. It is opt-in and remains
+unqualified for rendered continuity; the released spatial-stage default is
+unchanged.
+
+The all-stage reference extension was withdrawn after rendered continuity and
+tone validation failed. The native reference applies only in low/probe; high
+uses its existing target-grid contract. This experimental mode is not a
+qualified correction for tone or frame shifts.
+
+A separate append-only `uniform_source_detail_transport` boolean is **off by
+default**, including saved workflows without it. Explicitly enabling it adds a
+weighted last-prefix exact-minus-learned latent residual before high refinement
+in either uniform-source mode. It adds no model, upscaler or VAE call, and
+supersedes the suffix DC bridge when applied. Calibration still consumes
+compute and memory.
+
+Prefix-pair error improvement does not establish suffix motion safety. A
+projection-nullspace motion regression demonstrates that the gate can accept
+while freezing stale fine detail and increasing suffix error. Neither control
+has rendered GPU quality or latency acceptance. Test exact visual context with
+transport off, and treat transport as a separate experimental comparison.
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.11
 
 Make one uniform source trajectory the default exact-prefix continuation, run

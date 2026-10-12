@@ -47,3 +47,12 @@ Use the suffixes as the contract:
 - `*.overlay.json` = topology/specification document only.
 
 `progressive-handoff.overlay.json` describes the **Partitioned Exact-Prefix** Continuum topology and complete production defaults. The generic **Target Input** path is retained explicitly as a control, including its conservative exact-prefix fallback, while historical progressive validation records remain separate. The overlay also records the one-release deprecation contract for `H3ProgressiveMixedGridHandoff`: the old node ID remains loadable with its original semantics, is not remapped to Target Input, and is not a production release gate.
+
+## Full-context boundary stage replay
+
+[`examples/full-stage-continuity.workflow.json`](examples/full-stage-continuity.workflow.json)
+loads the production native video VAE and runs the existing Local Boundary Audit
+on a saved uniform-source **boundary** bundle. Set the bundle path and assembled
+join frame before execution. It saves a numerical report and matched stage PNGs
+without H3 generation. Full-video decoder context is retained for all seven stages;
+see [the protocol and interpretation limits](../docs/FULL_STAGE_CONTINUITY.md).
