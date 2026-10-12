@@ -86,7 +86,7 @@ def capture_token_admission(locals_, *, require_cuda=True):
         "overflow_groups": int(overflow.sum()),
         "at_budget_groups": int((counts == aug).sum()),
         "max_window_candidates": int(windows.max()),
-        "max_top_bin": int(histogram[..., -1].max()),
+        "max_top_bin": int(histogram[..., -1].to(torch.int64).max()),
         "reservations_sha256": _sha(counts),
         "histogram_sha256": _sha(histogram),
         "retained_ids_sha256": _sha(canonical),
