@@ -18,6 +18,7 @@ PAIR_OPTION = "h3_flow_low_native_full_pair_block_v1"
 MODULE_OPTION = "h3_flow_low_native_module_detail_v1"
 PROJECTION_OPTION = "h3_flow_low_native_projection_detail_v1"
 QKV_OPTION = "h3_flow_low_native_chunked_qkv_detail_v1"
+TOKEN_OPTION = "h3_flow_low_native_token_admission_v1"
 QKV_CHUNK = 4096
 POLICY = "h3_low_native_execution_v1"
 
@@ -43,6 +44,12 @@ def validate_module_detail(detail):
 def validate_projection_detail(detail):
     if type(detail) is not bool:
         raise ValueError("low_native_trace_projection_detail must be boolean")
+    return detail
+
+
+def validate_token_detail(detail):
+    if type(detail) is not bool:
+        raise ValueError("low_native_trace_token_admission must be boolean")
     return detail
 
 
@@ -124,6 +131,7 @@ class NativeExecutionTrace:
         module_detail=False,
         projection_detail=False,
         qkv_detail=False,
+        token_detail=False,
         arm_bytes=2 * 1024**3,
         tensor_bytes=512 * 1024**2,
         max_records=40,
@@ -133,6 +141,12 @@ class NativeExecutionTrace:
         self.module_detail = validate_module_detail(module_detail)
         self.projection_detail = validate_projection_detail(projection_detail)
         self.qkv_detail = validate_qkv_detail(qkv_detail)
+        self.token_detail = validate_token_detail(token_detail)
+        if self.token_detail and (self.step < 0 or self.pair_block < 0):
+            raise ValueError("low_native_trace_token_admission requires selected step and pair block")
+        from .native_token_admission import CoreTokenAdmissionObserver
+
+        self.token_admission = CoreTokenAdmissionObserver() if self.token_detail else None
         if self.qkv_detail and not (self.projection_detail and self.module_detail):
             raise ValueError("low_native_trace_qkv_detail requires module_detail and projection_detail")
         if self.projection_detail and not self.module_detail:
@@ -381,7 +395,7 @@ class NativeExecutionTrace:
     def internal_block_hooks(self, trace, layer, layers, block, options, previous):
         """Append read-only probes after existing adapter hooks; restore on exit."""
         selected = (
-            self.module_detail
+            (self.module_detail or self.token_detail)
             and self.pair_block == layer
             and trace.arm in {"A", "B_target_projection", "A_replay"}
             and trace.stage == "low"
@@ -512,12 +526,15 @@ class NativeExecutionTrace:
                             self.observe(trace, layer, layers, name, result, block, options, previous)
 
                     handles.append(module.register_forward_hook(callback))
-            yield
+            with self.token_admission.observe(trace.arm) if self.token_admission is not None else contextlib.nullcontext():
+                yield
         finally:
             for handle in reversed(handles):
                 handle.remove()
 
     def observe(self, trace, layer, layers, boundary, tensor, block, options, previous):
+        if self.token_detail and not self.qkv_detail and not self.module_detail:
+            return  # Token-only mode avoids gigabytes of native hidden-state hashing.
         if self.step < 0 or trace.arm not in {"A", "B_target_projection", "A_replay"}:
             return
         if trace.stage != "low" or trace.evaluation != self.step or trace.native_call != 1:
@@ -749,6 +766,7 @@ class NativeExecutionTrace:
             "internal_module_detail": self.module_detail,
             "internal_projection_detail": self.projection_detail,
             "internal_qkv_detail": self.qkv_detail,
+            "internal_token_admission": self.token_admission.summary() if self.token_admission else None,
             "chunked_qkv_expected": self.qkv_expected,
             "chunked_qkv_observed_calls": {
                 who: {"inputs": counts[0][0], "outputs": counts[1][0]} for who, counts in self.qkv_calls.items()
