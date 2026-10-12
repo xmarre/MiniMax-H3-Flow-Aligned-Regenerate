@@ -262,6 +262,7 @@ class Comparisons:
             report[name] = row
         return report
 
+
 class ExtensionObserver:
     """Private extension proxy, receiving tensors through a private identity wrap."""
 
