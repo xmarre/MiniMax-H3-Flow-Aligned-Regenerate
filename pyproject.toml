@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "comfyui-minimax-h3-flow-aligned-regenerate"
-version = "0.3.11"
+version = "0.3.12"
 description = "H3-native flow-aligned and progressive-resolution regeneration for ComfyUI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,7 +25,7 @@ Icon = ""
 includes = []
 
 [project.optional-dependencies]
-test = ["numpy>=1.25", "pytest>=8.3", "ruff>=0.11", "torch>=2.5"]
+test = ["numpy>=1.25", "pillow>=9", "pytest>=8.3", "ruff>=0.11", "torch>=2.5"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["h3_flow_regenerate"]

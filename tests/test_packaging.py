@@ -37,7 +37,7 @@ def test_comfy_registry_archive_excludes_development_only_paths():
     ]
 
 
-def test_custom_node_root_registration_smoke():
+def test_custom_node_root_registration_smoke(capsys):
     root = Path(__file__).parents[1] / "__init__.py"
     spec = importlib.util.spec_from_file_location(
         "h3_flow_custom_node",
@@ -53,6 +53,8 @@ def test_custom_node_root_registration_smoke():
     assert "H3RefineTargetGeometry" in module.NODE_CLASS_MAPPINGS
     assert "H3RuntimeMetricsProbe" in module.NODE_CLASS_MAPPINGS
     assert "H3FlowLocalBoundaryAudit" in module.NODE_CLASS_MAPPINGS
+    assert "H3NativeSourceContinuationHandoff" in module.NODE_CLASS_MAPPINGS
+    assert "diagnostic_sources=" not in capsys.readouterr().out
 
 
 def test_progressive_nodes_expose_all_selectable_guidance_controls():
