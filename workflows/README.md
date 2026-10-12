@@ -6,9 +6,10 @@ This directory contains executable examples and non-executable wiring overlays. 
 
 `examples/*.workflow.json` are ordinary ComfyUI LiteGraph workflow documents. Drag them onto the ComfyUI canvas or use **Workflow > Open**.
 
-The examples intentionally cover the production partitioned node and the two simpler progressive controls:
+The examples cover the production native-source interface, a preserved legacy layout and two simpler progressive controls:
 
-- `examples/partitioned-exact-prefix.workflow.json` serializes the current **MiniMax H3 Partitioned Exact-Prefix Handoff** defaults exactly. It wires **MiniMax H3 Latent Upscaler Provider (3D)** and stores `progressive_uniform_source`, `main_then_shadow`, `frame_gauge_repair=false`, exact-mask audio semantics, the current 16/6 stored audio/video overlap widths, `suffix_dc_bridge=false` and the unused `target_band_tokens=4`.
+- `examples/native-source-continuation.workflow.json` uses **MiniMax H3 Native Source Continuation**, native source carry and the compact supported settings. Generate the full sequence using the same patched MODEL.
+- `examples/partitioned-exact-prefix.workflow.json` preserves the legacy **MiniMax H3 Partitioned Exact-Prefix Handoff** defaults exactly. It wires **MiniMax H3 Latent Upscaler Provider (3D)** and stores `progressive_uniform_source`, `main_then_shadow`, `frame_gauge_repair=false`, exact-mask audio semantics, the current 16/6 stored audio/video overlap widths, `suffix_dc_bridge=false` and the unused `target_band_tokens=4`.
 - `examples/progressive-target-input.workflow.json` remains the general Target Input control. It uses `source_scale=0.70`, fixed `handoff_coordinate=0.35`, `direction+temporal`, and `learned_3d` transfer.
 - `examples/progressive-source-input.workflow.json` remains the dependency-minimal source-input control. Generation starts from an `864x480` source-grid latent and hands off to a `1.20x` target scale in the same sampler run.
 
@@ -20,7 +21,7 @@ The filenames in the H3 loader nodes match the public Comfy-Org MiniMax H3 model
 
 ### Exact-prefix behavior
 
-For the coordinated Continuum stack, use `H3PartitionedExactPrefixDiagnosticHandoff` (displayed as **MiniMax H3 Partitioned Exact-Prefix Handoff**). The historical serialized ID is intentional. The compact example in this repository demonstrates the patch/provider/default serialization; when that patched `MODEL` is consumed by Continuum Native Masked continuation, a supported protected prefix selects the partitioned runtime.
+For the coordinated Continuum stack, use `H3NativeSourceContinuationHandoff` (**MiniMax H3 Native Source Continuation**). The old `H3PartitionedExactPrefixDiagnosticHandoff` ID and widget positions remain loadable under **[Legacy Controls]**. Retired live replay fields cannot add sampling calls or observers. The compact example in this repository demonstrates the patch/provider/default serialization; when that patched `MODEL` is consumed by Continuum Native Masked continuation, a supported protected prefix selects the partitioned runtime.
 
 The production profile uses `progressive_uniform_source`: continuation low/probe runs one full-duration reduced-grid clip, the learned upscaler transfers the whole generated trajectory to the target grid, the exact target-grid prefix is restored before target-grid high refinement, exact carried audio/video ownership is restored at output, and the first all-generated chunk still uses progressive `learned_3d` transfer. `same_grid_target_control`, the previous default, remains selectable. `audio_guided_overlap_ticks=16` is stored with `sampler_mask_exact_timestep`, which aliases coherent exact-mask behavior and therefore applies zero effective audio release. `video_guided_overlap_tokens=6` is provenance-only and applies zero protected-video release.
 
@@ -30,8 +31,9 @@ The deprecated `H3ProgressiveMixedGridHandoff` node remains registered for one c
 
 ## API-format equivalents
 
-`examples/*.api.json` contain the same three paths as complete ComfyUI API-format prompt graphs. Submit them with the normal ComfyUI API client or POST their JSON as the `prompt` payload to `/prompt`.
+`examples/*.api.json` contain the same paths as complete ComfyUI API-format prompt graphs. Submit them with the normal ComfyUI API client or POST their JSON as the `prompt` payload to `/prompt`.
 
+- `examples/native-source-continuation.api.json`
 - `examples/partitioned-exact-prefix.api.json`
 - `examples/progressive-target-input.api.json`
 - `examples/progressive-source-input.api.json`

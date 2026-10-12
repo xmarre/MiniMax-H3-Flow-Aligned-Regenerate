@@ -400,6 +400,7 @@ def audit_prefix_projection(vae, bundle_path, join_frame, process_out, *, rois, 
 
 class H3FlowPrefixProjectionAudit:
     DEPRECATED = True
+
     @classmethod
     def INPUT_TYPES(cls):
         return {

@@ -324,3 +324,28 @@ def test_full_stage_continuity_canvas_uses_current_widget_contract_and_saves_pre
     assert values["validate_full_video_decoder"] is False
     assert values["bundle_path"] == ""
     assert values["chunk_join_frame"] == 175
+
+
+def test_native_source_continuation_examples_match_registered_schema_and_model_wiring():
+    from h3_flow_regenerate.partitioned_node import H3NativeSourceContinuationHandoff
+
+    api = _load("native-source-continuation.api.json")
+    canvas = _load("native-source-continuation.workflow.json")
+    _assert_common_api_chain(api, "H3NativeSourceContinuationHandoff")
+    _assert_canvas_links_resolve(canvas, "H3NativeSourceContinuationHandoff")
+    prompt = next(n for n in api.values() if n["class_type"] == "H3NativeSourceContinuationHandoff")
+    node = next(n for n in canvas["nodes"] if n["type"] == "H3NativeSourceContinuationHandoff")
+    schema = H3NativeSourceContinuationHandoff.INPUT_TYPES()
+    widget_names = []
+    for section in schema.values():
+        for name, field in section.items():
+            if isinstance(field[0], list) or field[0] in ("INT", "FLOAT", "BOOLEAN", "STRING"):
+                widget_names.append(name)
+                value = prompt["inputs"][name]
+                if isinstance(field[0], list):
+                    assert value in field[0]
+                assert value == field[1]["default"]
+    assert node["widgets_values"] == [prompt["inputs"][name] for name in widget_names]
+    assert set(schema["required"]) <= set(prompt["inputs"])
+    assert set(prompt["inputs"]) <= set(schema["required"]) | set(schema["optional"])
+    assert prompt["inputs"]["source_prefix_projection"] == "native_source_carry"

@@ -65,3 +65,6 @@ ground truth, and changing/occluded regions cannot support static registration.
 Full stage comparison does not rerun a target-high B arm, reconstruct the prior
 chunk's assembled frames, modify production output, or qualify audio. Rendered
 AV acceptance remains a separate requirement.
+
+
+Release interpretation: slight darkening remains unresolved. The user reports good boundaries across multiple prompts and references. Fitted camera motion and sharpness changes can reflect conditioning and focus; they do not establish unwanted zoom or bokeh. No Spectrum cause has been established.

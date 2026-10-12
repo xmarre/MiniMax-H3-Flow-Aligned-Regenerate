@@ -119,3 +119,8 @@ sampling/attention effects are not distinguished by this fixed-setting capture.
 Do not promote a geometric warp or stronger global tone correction based on
 these stage fits. Final audiovisual acceptance and a target-high causal quality
 comparison remain separate from this successful stage-decode qualification.
+
+
+## Release cleanup interpretation — 2026-10-12
+
+The user reports good boundaries across many prompts and reference images, with slight darkening remaining. The fitted motion and sharpness observations above do not establish an unwanted zoom or bokeh defect: camera and focus can follow conditioning and subject motion. No Spectrum cause is established. Retain native source carry and the measured evidence, retire live replay/kernel probes, and carry the darkening as a known issue rather than a claimed tone fix.

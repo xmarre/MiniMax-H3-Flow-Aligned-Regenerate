@@ -217,6 +217,7 @@ def audit_saved_low_aba(
 
 class H3FrozenLowABAudit:
     DEPRECATED = True
+
     @classmethod
     def INPUT_TYPES(cls):
         return {

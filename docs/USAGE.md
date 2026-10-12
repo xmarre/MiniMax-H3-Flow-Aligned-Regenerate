@@ -7,7 +7,7 @@ The repository exposes two main generation paths:
 1. **flow-aligned two-pass guidance** — capture a low-resolution H3 trajectory and use it to guide a later high-resolution/refine pass;
 2. **progressive handoff** — keep the early part of one schedule on a smaller video grid, then transition once to the target grid and continue sampling.
 
-For target-input workflows, including H3 Continuum exact-prefix continuation, **MiniMax H3 Progressive Handoff (Target Input)** is the standard path. The former Mixed-Grid Continuum path remains executable for one compatibility release but is deprecated and is not part of the production acceptance topology.
+For general target-input workflows, **MiniMax H3 Progressive Handoff (Target Input)** is the standard path. Use **MiniMax H3 Native Source Continuation** for the coordinated Continuum exact-prefix path. The former Mixed-Grid Continuum path remains executable for one compatibility release but is deprecated and is not part of the production acceptance topology.
 
 ## Canonical Target Input defaults
 
@@ -42,11 +42,26 @@ offload_after_upscale  = false
 
 Historical benchmark configurations in `BENCHMARKS.md`, `PERFORMANCE.md`, and `workflows/benchmark-matrix.json` retain the values that were actually measured. They are evidence records, not current-default declarations.
 
-## Partitioned exact-prefix Continuum defaults
+## Native Source Continuation
 
-Use **MiniMax H3 Partitioned Exact-Prefix Handoff** with the coordinated
+Use **MiniMax H3 Native Source Continuation** with Continuum Native Masked,
+VDN-H3-Plus and the learned 3D provider. Wire its patched MODEL into scheduler,
+guider and every Continuum chunk, including the initial generation. Native source
+carry requires exact pairing with the preceding returned target suffix and stops
+before sampling when that context is missing or mismatched.
+
+New nodes default to source scale `0.70`, fixed handoff `0.35`,
+`direction+temporal` guidance, native source carry, coherent exact audio masks
+and detail transport off. Capture is optional and off. Explicit saved detail
+transport remains supported. See [native carry contract](NATIVE_SOURCE_PREFIX_CARRY.md)
+and the canvas/API examples under `workflows/examples/native-source-continuation.*.json`.
+Slight darkening remains a known issue; no Spectrum cause has been established.
+
+## Legacy partitioned exact-prefix defaults
+
+The preserved **MiniMax H3 Partitioned Exact-Prefix Handoff [Legacy Controls]** uses the coordinated
 Sol-H3, VDN-H3-Plus, Continuum and Upscaler releases listed in the README.
-New nodes use the following defaults; explicit saved controls remain active:
+Its existing layout and explicit settings are retained. Live low-sampler A/B/A and kernel observer flags are inert compatibility fields and clear stale observer state. Saved audit readers remain available. The legacy defaults are:
 
 ```text
 source_mode                      = scale

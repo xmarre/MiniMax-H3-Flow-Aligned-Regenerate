@@ -63,10 +63,10 @@ from .source_prefix_projection import SOURCE_PREFIX_PROJECTION_OPTIONS, configur
 class H3PartitionedExactPrefixHandoff:
     """Run low/probe/high continuation without resizing exact protected context.
 
-    This remains an experimental node until the real SM120 and decoded-media
-    gates are closed. The released Progressive Target Input node is unchanged.
+    Compatibility interface for historical mixed-grid continuation workflows.
     """
 
+    DEPRECATED = True
     FRAME_GAUGE_REPAIR_DEFAULT = False
     PRODUCTION_DEFAULT_CHANGED = False
 
@@ -599,119 +599,21 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
-        spec["required"]["low_sampler_aba"] = (
-            "BOOLEAN",
-            {
-                "default": False,
-                "tooltip": (
-                    "EXPERIMENTAL GPU A/B/A source-low sampler replay for native_source_carry. "
-                    "Run full initial+continuation with the same MODEL, trajectory capture and "
-                    "capture_boundary_witness=true. Adds two complete low/probe lifetimes and "
-                    "freezes Python/NumPy/Torch RNG. The initial A is the normal production "
-                    "low path, B changes only its source prefix, A' verifies reproducibility. "
-                    "A/B/A measurements are not a seam fix or production acceptance."
-                ),
-            },
+        retired_tooltip = (
+            "Retired compatibility field. Saved values remain loadable; live replay and kernel observation "
+            "no longer execute. Saved diagnostic bundles remain readable."
         )
+        spec["required"]["low_sampler_aba"] = ("BOOLEAN", {"default": False, "tooltip": retired_tooltip})
         spec["optional"]["video_vae"] = ("VAE",)
-        spec["required"]["low_native_trace_step"] = (
-            "INT",
-            {
-                "default": -1,
-                "min": -1,
-                "max": 511,
-                "tooltip": "Optional native execution observation within low_sampler_aba. -1 disables; "
-                "otherwise choose a zero-based low logical prediction. Records full packed hidden hashes "
-                "at first/middle/final blocks and read-only in-lease backend metadata. No extra model calls; "
-                "host-copy synchronization can perturb timing. Forecast predictions have no native witness.",
-            },
-        )
-        spec["required"]["low_native_trace_pair_block"] = (
-            "INT",
-            {
-                "default": -1,
-                "min": -1,
-                "max": 511,
-                "tooltip": (
-                    "Optional full-byte native block-pair inspection in low_sampler_aba. -1 retains "
-                    "the original sampled late-block tracing; otherwise choose a zero-based block "
-                    "after middle+1 and before the final block (45 for run 01867). Full-hashes the "
-                    "output of the predecessor, input and output of the chosen block, final "
-                    "output and block-0 input, within 2 GiB per arm. Requires low_native_trace_step>=0."
-                ),
-            },
-        )
-        spec["required"]["low_native_trace_module_detail"] = (
-            "BOOLEAN",
-            {
-                "default": False,
-                "tooltip": (
-                    "Optional full-byte internal module witnesses for selected trace pair block: "
-                    "input, attention out_proj, post-attention norm2, MLP and block output. "
-                    "Five BF16 witnesses remain within 2 GiB per arm. Temporary read-only hooks "
-                    "are removed after the block; also reads Core sparse pooled-statistic hashes. "
-                    "Requires low_sampler_aba, native trace step and native trace pair block."
-                ),
-            },
-        )
-        spec["required"]["low_native_trace_projection_detail"] = (
-            "BOOLEAN",
-            {
-                "default": False,
-                "tooltip": (
-                    "Requires module detail. Replaces its five block witnesses with full BF16 hashes "
-                    "of block input, attention out_proj input, raw projection output before registered "
-                    "post-forward LoRA hooks, output after those hooks, and final block output. "
-                    "At 36,445 rows this remains within the 2 GiB/arm budget. Also fixes "
-                    "Core sparse patch pooled statistics recognition under filesystem module imports. "
-                    "Read-only diagnostic; hooks are removed even on exceptions."
-                ),
-            },
-        )
-        spec["required"]["low_native_trace_qkv_detail"] = (
-            "BOOLEAN",
-            {
-                "default": False,
-                "tooltip": (
-                    "Read-only full BF16 input and adapted-output hashes for every 4096-row "
-                    "Core H3 sparse attention-producing QKV chunk in selected block. "
-                    "Cold pooled state replays producer twice; counts both passes but "
-                    "captures the second. Primed state captures the only pass. "
-                    "Requires module/projection detail. Also fingerprints complete Core "
-                    "RoPE and Q/K norm weights, sparse-call scalar/sink arguments, and "
-                    "every 32nd row of attention output entering out_proj. Missing "
-                    "or differing argument provenance fails exactness. At 36,445 "
-                    "BF16 rows, total witness stays below 2 GiB/arm. Hook cleanup "
-                    "preserved; sampler/backend/VDN remain unchanged."
-                ),
-            },
-        )
-        spec["required"]["low_native_trace_token_admission"] = (
-            "BOOLEAN",
-            {
-                "default": False,
-                "tooltip": (
-                    "Read actual comfy-kitchen Core H3 token reservation counts, histogram and "
-                    "canonical retained-ID hashes in a selected low_sampler_aba block. "
-                    "Requires native step and pair block; does not replace CUDA kernels. "
-                    "Post-core synchronization can alter race scheduling. Token-only mode "
-                    "avoids full native hidden-state hashes."
-                ),
-            },
-        )
+        for name in ("low_native_trace_step", "low_native_trace_pair_block"):
+            spec["required"][name] = ("INT", {"default": -1, "min": -1, "max": 511, "tooltip": retired_tooltip})
         for name in (
-            "low_sampler_aba",
-            "low_native_trace_step",
-            "low_native_trace_pair_block",
             "low_native_trace_module_detail",
             "low_native_trace_projection_detail",
             "low_native_trace_qkv_detail",
             "low_native_trace_token_admission",
         ):
-            spec["required"][name][1]["tooltip"] = (
-                "Retired compatibility field. Saved values are retained, but live replay and kernel observation "
-                "no longer execute. Saved diagnostic bundles remain readable."
-            )
+            spec["required"][name] = ("BOOLEAN", {"default": False, "tooltip": retired_tooltip})
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -860,13 +762,13 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
 class H3NativeSourceContinuationHandoff(H3PartitionedExactPrefixDiagnosticHandoff):
     """Production uniform-source continuation with paired native source context."""
 
+    DEPRECATED = False
     CATEGORY = "MiniMax H3/flow regenerate"
     DESCRIPTION = (
         "Progressive H3 continuation with one uniform source trajectory, learned transfer, "
         "and exact protected video/audio. Native source carry pairs the preceding source "
         "prediction with its returned target suffix. Run the complete sequence with the "
-        "same patched MODEL. Residual darkening can remain; camera motion and focus follow "
-        "the model's conditioning."
+        "same patched MODEL."
     )
 
     @classmethod
@@ -875,6 +777,17 @@ class H3NativeSourceContinuationHandoff(H3PartitionedExactPrefixDiagnosticHandof
         legacy = H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()
         for name in ("audio_guided_overlap_mode", "audio_guided_overlap_ticks", "uniform_source_detail_transport"):
             spec["required"][name] = copy.deepcopy(legacy["required"][name])
+        spec["required"]["audio_guided_overlap_mode"] = (
+            ["sampler_mask_exact_timestep", "exact_mask", "sampler_mask"],
+            {
+                "default": "sampler_mask_exact_timestep",
+                "tooltip": "Exact modes protect carried audio. Sampler mask releases the selected overlap width.",
+            },
+        )
+        spec["required"]["uniform_source_detail_transport"][1]["tooltip"] = (
+            "Transfer the last-prefix exact-minus-learned detail residual before high refinement. "
+            "Adds no model or VAE call. May affect suffix detail; compare rendered output."
+        )
         spec["required"]["source_prefix_projection"] = (
             ["native_source_carry", "latent_bicubic"],
             {
@@ -913,6 +826,8 @@ class H3NativeSourceContinuationHandoff(H3PartitionedExactPrefixDiagnosticHandof
         temporal_weight=0.20,
         capture_boundary_witness=False,
     ):
+        if audio_guided_overlap_mode not in ("sampler_mask_exact_timestep", "exact_mask", "sampler_mask"):
+            raise ValueError("native source continuation requires a coherent audio mask mode")
         if source_prefix_projection not in ("native_source_carry", "latent_bicubic"):
             raise ValueError("native source continuation supports native_source_carry or latent_bicubic")
         return super().patch(

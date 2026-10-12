@@ -312,6 +312,7 @@ def audit_native_prefix_counterfactual(
 
 class H3NativePrefixCounterfactual:
     DEPRECATED = True
+
     @classmethod
     def INPUT_TYPES(cls):
         return {

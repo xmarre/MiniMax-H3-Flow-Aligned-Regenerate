@@ -1,40 +1,28 @@
-# Native source-prefix carry experiment
+# Native source-prefix carry
 
-This opt-in continuation test preserves source context from the preceding chunk's
-actual low/probe clean prediction, instead of reconstructing that context from
-its refined target output. It tests whether changing representations between
-chunks contributes to background drift and detail loss. It is an experimental
-input policy, not an established quality fix.
+Native Source Continuation uses the preceding chunk's already-computed low/probe
+clean prediction as source context. The frozen low-model A/B/A comparison favored
+this policy over half-pixel latent reconstruction: the latter substantially
+softened its source decode. The user reports good boundaries across multiple
+reference images and prompts. Slight darkening remains unresolved, and fitted
+camera/focus changes are not established defects.
 
-The first trained-GPU continuation evaluation executed the carry contract but
-retained background expansion and detail loss. Carry mode has not passed rendered
-acceptance. Exact ownership pairing does not establish that the source prediction
-and refined target depict the same conditioning context.
+## Setup
 
-## Patcher workflow
+1. Use **MiniMax H3 Native Source Continuation** with Continuum Native Masked,
+   VDN-H3-Plus and the learned 3D upscaler.
+2. Generate the full sequence with the same patched MODEL, starting with the
+   initial chunk. Native carry is the new node's default. A cached initial chunk
+   from another model or input policy is insufficient.
+3. Preserve the authoritative returned target suffix when supplying the next
+   prefix. No saved audit bundle or video VAE is a runtime input.
+4. Optional boundary capture saves source/stage operands for offline native-VAE
+   replay. Judge tone and audiovisual continuity on rendered output.
 
-1. Refresh Flow PR #99 through ComfyUI Patcher and restart ComfyUI.
-2. In **MiniMax H3 Partitioned Exact-Prefix Handoff**
-   (`H3PartitionedExactPrefixDiagnosticHandoff`), retain
-   `spatial_stage_control=progressive_uniform_source` and select
-   `source_prefix_projection=native_source_carry`.
-3. Execute the full sequence with this same patched MODEL, starting with its
-   initial chunk. The initial chunk must execute under this mode to populate
-   source context. A cached initial chunk from another mode is insufficient.
-   No saved boundary bundle is a runtime input. No video VAE is required for
-   this mode; an existing connection can remain.
-4. Keep the established seed, checkpoints, geometry, schedule, guidance, audio
-   settings, attention backends and Continuum **Auto 3** fixed. Enable
-   `capture_boundary_witness=true` and save Flow metrics.
-5. Save the rendered continuation and run the existing Extended Local Boundary
-   Audit on its capture. Compare matching join and later frames for background
-   geometry, bookshelf/picture detail and tone; inspect pose, clothing, face,
-   flicker, end-of-chunk behavior and speech. A useful result needs rendered
-   improvement without unacceptable regressions.
-
-The widget default remains `latent_bicubic`. `vae_rgb_roundtrip` remains
-available as a separate reconstruction experiment documented in
-[PREFIX_PROJECTION_AB.md](PREFIX_PROJECTION_AB.md).
+The legacy node's existing default and stored widget values remain unchanged.
+It can select native carry explicitly; its VAE roundtrip reconstruction control
+is retained for compatibility. Live frozen A/B/A capture and kernel observers
+have been retired. Saved bundles remain readable.
 
 ## State and numerical contract
 

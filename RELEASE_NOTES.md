@@ -1,53 +1,35 @@
-# Unreleased: experimental continuation controls
+# MiniMax H3 Flow-Aligned Regenerate v0.3.12 — release candidate
 
-Run 01770 still showed frame shift and darkening. Uniform continuation now
-retains the low trajectory's measured residual instead of replacing it with
-unrelated high-grid noise. Gaussian refinement uses the ordinary antialiased
-half-pixel image grid and constrains new innovation to its coarse nullspace.
-Deterministic model drift uses a separate constant-preserving image lift;
-stochastic samplers retain the complete measured residual. This adds no model
-calls and leaves the reduced-grid low stage, exact protected AV ownership and
-sampler schedule intact. Rendered acceptance and GPU timing are pending.
-Uniform learned-provider receipts now correctly report the checkpoint call.
-See [01770 evidence and candidate](docs/validation/CONTINUATION_01770_IMAGE_NOISE.md).
+Native Source Continuation is the compact production interface for a uniform
+reduced-grid trajectory, paired native source context, learned 3D transfer and
+exact carried audio/video. The complete sequence must use the same patched MODEL.
+Native carry introduces no additional H3, provider or VAE evaluations. The
+image-grid handoff retains the low trajectory's measured residual rather than
+replacing it with unrelated high-grid noise.
 
+Existing node IDs, widget positions and explicit continuation settings remain
+loadable. The legacy diagnostic interface keeps its layout; retired live replay
+flags now clear stale observer options and emit a compatibility receipt. New
+workflows use the smaller interface and the new canvas/API examples.
 
-Uniform continuation now keeps the initial chunk's image-grid resize and
-ordinary learned-upscaler path. Previously both uniform modes inherited the
-heterogeneous attention-coordinate projection and forced a different
-encoder-to-decoder interpolation from chunk 1. This changes the source prefix
-seen by low/probe and the learned transfer; at the tested 50x38 -> 72x54 geometry
-the two interpolation conventions differ by about 0.30 source latent cells
-on coordinate ramps. The correction adds no model calls and preserves the
-exact returned prefix, audio ownership and sampling schedule. It is a concrete
-representation correction, rejected as a sufficient tone/motion fix in 01770.
-See [image-lattice investigation](docs/validation/CONTINUATION_01769_IMAGE_LATTICE.md).
+Removed the completed live low-sampler A/B/A machinery, internal kernel observers,
+startup diagnostic dumps, dedicated CUDA reproducer and its compile-only CI job.
+Saved audit readers, boundary capture and full-stage native-VAE replay remain.
+Historical evidence and the pre-cleanup checkpoint preserve the investigation.
 
-`progressive_uniform_source_exact_context` adds unresampled prefix visual
-conditioning to low/probe through Core's native video-reference layout, while
-preserving one source-grid video recurrence. The reference occupies a separate
-time span; target audio, video and keyframes advance together. This changes their
-time relative to text and existing references. It is opt-in and remains
-unqualified for rendered continuity; the released spatial-stage default is
-unchanged.
+The user reports good boundaries across multiple prompts and reference images.
+Slight darkening remains unresolved. Zoom and bokeh are not classified as defects
+on the basis of fitted motion or sharpness metrics, and no Spectrum cause is
+established. This release candidate does not claim a tone correction or universal
+rendered acceptance. Detail transport stays off by default; saved explicit values
+are retained.
 
-The all-stage reference extension was withdrawn after rendered continuity and
-tone validation failed. The native reference applies only in low/probe; high
-uses its existing target-grid contract. This experimental mode is not a
-qualified correction for tone or frame shifts.
-
-A separate append-only `uniform_source_detail_transport` boolean is **off by
-default**, including saved workflows without it. Explicitly enabling it adds a
-weighted last-prefix exact-minus-learned latent residual before high refinement
-in either uniform-source mode. It adds no model, upscaler or VAE call, and
-supersedes the suffix DC bridge when applied. Calibration still consumes
-compute and memory.
-
-Prefix-pair error improvement does not establish suffix motion safety. A
-projection-nullspace motion regression demonstrates that the gate can accept
-while freezing stale fine detail and increasing suffix error. Neither control
-has rendered GPU quality or latency acceptance. Test exact visual context with
-transport off, and treat transport as a separate experimental comparison.
+The numerical overflow correction is owned by
+[comfy-kitchen #242](https://github.com/Comfy-Org/comfy-kitchen/pull/242).
+Packaging/interoperability is owned by
+[#246](https://github.com/Comfy-Org/comfy-kitchen/pull/246). A coordinated release
+must use the qualified Kitchen build; Flow's cleanup does not itself ship those
+upstream fixes. The existing stable companion versions below remain historical.
 
 # MiniMax H3 Flow-Aligned Regenerate v0.3.11
 
