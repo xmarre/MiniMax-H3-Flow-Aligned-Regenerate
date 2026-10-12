@@ -207,38 +207,60 @@ def token_summary(tensors, t, aug):
 
 
 class Comparisons:
-    """CPU baselines bounded by one iteration, plus hashes/metrics per repeat."""
+    """Byte-exact GPU comparisons; SHA256 only for baseline and changed bytes.
+
+    Reference snapshots remain on the tensor's device until the case ends.
+    Reusing a baseline SHA256 is valid only after a byte-view equality check,
+    which distinguishes signed zero and floating-point NaN payloads.
+    """
 
     def __init__(self):
         self.baseline = {}
+        self.baseline_sha = {}
         self.first_difference = None
 
     def observe(self, key, tensors, iteration):
         report = {}
         for name, x in tensors.items():
-            cpu = x.detach().contiguous().cpu()
+            current = x.detach().contiguous()
             tag = (key, name)
             if tag not in self.baseline:
-                self.baseline[tag] = cpu
-            ref = self.baseline[tag]
-            same = digest(cpu) == digest(ref)
-            row = receipt(cpu)
-            row["bitwise_equal"] = same
+                reference = current.clone()
+                self.baseline[tag] = reference
+                self.baseline_sha[tag] = digest(reference)
+                same = True
+            else:
+                reference = self.baseline[tag]
+                if current.shape != reference.shape or current.dtype != reference.dtype:
+                    raise ValueError(f"observation shape/dtype changed: {tag}")
+                # torch.equal(float) would treat +0 and -0 as identical and
+                # NaNs as different regardless of payload; compare raw bytes.
+                same = torch.equal(
+                    current.reshape(-1).view(torch.uint8),
+                    reference.reshape(-1).view(torch.uint8),
+                )
+            row = {
+                "shape": list(current.shape),
+                "dtype": str(current.dtype),
+                "sha256": self.baseline_sha[tag] if same else digest(current),
+                "bitwise_equal": same,
+            }
             if not same:
                 if self.first_difference is None:
                     self.first_difference = {"iteration": iteration, "stage": key, "tensor": name}
-                diff = cpu.to(torch.float64) - ref.to(torch.float64)
+                # Keep large reductions on the GPU. BF16 and the integer index
+                # ranges in this diagnostic are represented exactly in FP32.
+                diff = current.to(torch.float32) - reference.to(torch.float32)
                 row.update(rms=float(diff.square().mean().sqrt()), max_abs=float(diff.abs().max()))
                 if name in ("tokIdx", "idx"):
-                    location = (cpu != ref).any(-1).nonzero()[0].tolist()
+                    location = (current != reference).any(-1).nonzero()[0].tolist()
                     row["first_changed_list"] = {
                         "location": location,
-                        "before": ref[tuple(location)].tolist(),
-                        "after": cpu[tuple(location)].tolist(),
+                        "before": reference[tuple(location)].tolist(),
+                        "after": current[tuple(location)].tolist(),
                     }
             report[name] = row
         return report
-
 
 class ExtensionObserver:
     """Private extension proxy, receiving tensors through a private identity wrap."""
