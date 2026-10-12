@@ -155,7 +155,6 @@ def node_call(**changes):
     return node.patch(**(values | changes))
 
 
-
 def test_actual_core_token_admission_is_default_off_and_explicitly_scoped():
     from h3_flow_regenerate.partitioned_node import H3PartitionedExactPrefixDiagnosticHandoff
 
