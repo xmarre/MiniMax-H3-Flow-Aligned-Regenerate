@@ -65,7 +65,7 @@ def test_profile_event_requires_verified_successful_wrapper_return(monkeypatch):
     from h3_flow_regenerate import native_token_admission as token
 
     observer = CoreTokenAdmissionObserver()
-    record = {"calls": 0, "complete": False}
+    record = {"entries": 0, "calls": 0, "complete": False}
     frame = SimpleNamespace(
         f_code=SimpleNamespace(
             co_name="sol_attn_chunked",
@@ -79,8 +79,9 @@ def test_profile_event_requires_verified_successful_wrapper_return(monkeypatch):
     monkeypatch.setattr(token, "capture_token_admission", lambda _locals: {"complete": True, "token_aug": 256})
     observer.record_event(record, frame, "c_return", SimpleNamespace(__name__="sol_attn_core"))
     assert record["calls"] == 0
+    observer.record_event(record, frame, "call", None)
     observer.record_event(record, frame, "return", output)
-    assert record["calls"] == 1 and record["complete"]
+    assert record["entries"] == 1 and record["calls"] == 1 and record["complete"]
     observer.record_event(record, frame, "return", output)
     assert record["calls"] == 2 and record["unobserved"] == "multiple_core_calls"
 
@@ -126,6 +127,7 @@ def test_actual_python_profile_return_event_is_captured(monkeypatch):
     with observer.observe("A"):
         assert scope["sol_attn_chunked"]()[0] is outputs[0]
     assert sys.getprofile() is old
+    assert observer.records["A"]["entries"] == 1
     assert observer.records["A"]["calls"] == 1
     assert observer.records["A"]["complete"] is True
 
@@ -158,7 +160,7 @@ def test_thread_profile_restores_on_failure_and_missing_call():
             raise ZeroDivisionError()
         assert sys.getprofile() is old
         assert observer.records["A"]["complete"] is False
-        assert observer.records["A"]["unobserved"] == "missing_or_multiple_core_calls"
+        assert observer.records["A"]["unobserved"] == "missing_or_multiple_chunked_wrapper_calls"
     finally:
         sys.setprofile(old)
 
