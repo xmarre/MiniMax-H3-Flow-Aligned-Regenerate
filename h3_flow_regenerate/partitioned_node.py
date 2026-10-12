@@ -686,6 +686,19 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        spec["required"]["low_native_trace_token_admission"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": (
+                    "Read actual comfy-kitchen Core H3 token reservation counts, histogram and "
+                    "canonical retained-ID hashes in a selected low_sampler_aba block. "
+                    "Requires native step and pair block; does not replace CUDA kernels. "
+                    "Post-core synchronization can alter race scheduling. Token-only mode "
+                    "avoids full native hidden-state hashes."
+                ),
+            },
+        )
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
@@ -747,17 +760,20 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         low_native_trace_module_detail=False,
         low_native_trace_projection_detail=False,
         low_native_trace_qkv_detail=False,
+        low_native_trace_token_admission=False,
     ):
         from .native_execution_trace import MODULE_OPTION as NATIVE_MODULE_OPTION
         from .native_execution_trace import OPTION as NATIVE_TRACE_OPTION
         from .native_execution_trace import PAIR_OPTION as NATIVE_PAIR_OPTION
         from .native_execution_trace import PROJECTION_OPTION as NATIVE_PROJECTION_OPTION
         from .native_execution_trace import QKV_OPTION as NATIVE_QKV_OPTION
+        from .native_execution_trace import TOKEN_OPTION as NATIVE_TOKEN_OPTION
         from .native_execution_trace import (
             validate_module_detail,
             validate_pair_block,
             validate_projection_detail,
             validate_qkv_detail,
+            validate_token_detail,
             validate_step,
         )
 
@@ -766,6 +782,11 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         validate_module_detail(low_native_trace_module_detail)
         validate_projection_detail(low_native_trace_projection_detail)
         validate_qkv_detail(low_native_trace_qkv_detail)
+        validate_token_detail(low_native_trace_token_admission)
+        if low_native_trace_token_admission and (
+            not low_sampler_aba or low_native_trace_step < 0 or low_native_trace_pair_block < 0
+        ):
+            raise ValueError("low_native_trace_token_admission requires replay, native step and pair block")
         if low_native_trace_qkv_detail and not (low_native_trace_module_detail and low_native_trace_projection_detail):
             raise ValueError("low_native_trace_qkv_detail requires module and projection detail")
         if low_native_trace_projection_detail and not low_native_trace_module_detail:
@@ -862,6 +883,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         patched.model_options[NATIVE_MODULE_OPTION] = low_native_trace_module_detail
         patched.model_options[NATIVE_PROJECTION_OPTION] = low_native_trace_projection_detail
         patched.model_options[NATIVE_QKV_OPTION] = low_native_trace_qkv_detail
+        patched.model_options[NATIVE_TOKEN_OPTION] = low_native_trace_token_admission
         metrics.event(
             "partitioned_low_sampler_aba_control",
             enabled=bool(low_sampler_aba),
@@ -873,6 +895,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             low_native_trace_module_detail=low_native_trace_module_detail,
             low_native_trace_projection_detail=low_native_trace_projection_detail,
             low_native_trace_qkv_detail=low_native_trace_qkv_detail,
+            low_native_trace_token_admission=low_native_trace_token_admission,
         )
         return patched, metrics
 
