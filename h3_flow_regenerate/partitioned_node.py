@@ -773,8 +773,8 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             validate_pair_block,
             validate_projection_detail,
             validate_qkv_detail,
-            validate_token_detail,
             validate_step,
+            validate_token_detail,
         )
 
         validate_step(low_native_trace_step)
