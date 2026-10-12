@@ -633,8 +633,8 @@ The observation uses a temporary **thread-local Python profile callback**
 to inspect the actual `sol_attn_chunked` Python frame at successful Python
 return, after its unconditional `_C.sol_attn_core` invocation. It records
 wrapper entries separately from completed returns. A Python `c_return`
-callback for the extension method is **not** required (the previous
-instrumentation failed to observe it in real H3 run 01905). It never patches
+callback for the extension method is **not** required, because the
+extension binding need not expose a stable function name through profiling. It never patches
 `comfy_kitchen.sol_attn_chunked`, replaces the extension, changes model
 options, alters token budgets, or initiates additional forwards. It restores
 the prior profiler in `finally`; an already-active profiler is reported
