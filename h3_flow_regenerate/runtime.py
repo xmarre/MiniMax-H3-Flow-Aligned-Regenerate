@@ -29,6 +29,7 @@ from .handoff import (
     deterministic_video_noise,
     select_handoff_index,
 )
+from .low_sampler_trace import active_trace
 from .metrics import H3FlowMetrics
 from .mixed_grid import MIXED_GRID_KEY, build_mixed_grid_plan
 from .representation_bridge import (
@@ -41,6 +42,7 @@ from .seam_diagnostics import (
     recover_conditional_clean_for_diagnostics,
 )
 from .sigma import H3_AUDIO_SHIFT, H3_VIDEO_SHIFT, audio_sigma, normalized_coordinate
+from .source_prefix_carry import source_carry_owner, source_carry_scope
 from .source_trajectory_bridge import disabled_source_trajectory_bridge_metrics
 from .target_sparse import TARGET_SPARSE_CONTRACT_KEY, build_target_sparse_plan, target_sparse_contract
 from .tone_bridge import (
@@ -424,11 +426,14 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
     spectrum_completed_before = (
         getattr(spectrum_runtime, "last_completed_step_id", None) if spectrum_runtime is not None else None
     )
+    trace = active_trace()
+    if trace is not None:
+        trace.begin_prediction(guider, x, timestep, (model_options or {}).get("transformer_options", {}))
     started = time.perf_counter()
     result = executor(x, timestep, model_options, seed)
-    if binding is None:
-        return result
     transformer = (model_options or {}).get("transformer_options") or {}
+    if binding is None:
+        return trace.finish_prediction(result, guider, transformer) if trace is not None else result
     probe_context = transformer.get(PROBE_CONTEXT_KEY)
     stage = str(transformer.get(FLOW_STAGE_KEY, "single"))
     actual_value = transformer.get(SPECTRUM_ACTUAL_KEY)
@@ -511,6 +516,13 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
                 ),
             )
         active.call_index += 1
+
+    trace_identity = None
+    if trace is not None:
+        if active is not None:
+            trace_identity = (phase, outer)
+        elif spectrum_active_step is not None:
+            trace_identity = spectrum_active_step[1:]
 
     exact_bridge = transformer.get(EXACT_PREFIX_BRIDGE_KEY)
     if isinstance(exact_bridge, dict) and not bool(exact_bridge.get("applied")) and actual:
@@ -602,7 +614,11 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
                 boundary_trace.observe(
                     result, point="after_flow", call_index=boundary_call_index, sigma=sigma, actual=actual
                 )
-            return result
+            return (
+                trace.finish_prediction(result, guider, transformer, actual=actual, identity=trace_identity)
+                if trace is not None
+                else result
+            )
         base_model = getattr(guider, "inner_model", None)
         shapes = getattr(base_model, "latent_shapes", None)
         if not isinstance(shapes, list) or len(shapes) != 2:
@@ -670,6 +686,8 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
         )
     if boundary_trace is not None:
         boundary_trace.observe(result, point="after_flow", call_index=boundary_call_index, sigma=sigma, actual=actual)
+    if trace is not None:
+        return trace.finish_prediction(result, guider, transformer, actual=actual, identity=trace_identity)
     return result
 
 
@@ -1367,6 +1385,7 @@ def _run_target_sparse_exact_prefix(
         raise
 
 
+@source_carry_scope()
 def _run_progressive(
     executor,
     guider,
@@ -1583,6 +1602,9 @@ def _run_progressive(
             x = _resize_packed_latent_image(x, source_shapes, target_shapes)
         return callback(step, x0, x, len(sigmas) - 1)
 
+    source_carry = source_carry_owner(guider)
+    if source_carry is not None:
+        source_carry.begin_initial()
     _begin_capture(binding, guider, sampler, low_sigmas, source_shapes)
     try:
         _reset_guider_conds(
@@ -1661,6 +1683,8 @@ def _run_progressive(
     binding.metrics.increment("handoff_exact_probe_nfe")
     try:
         source_x0 = _process_latent_in(base_model, source_x0, source_shapes)
+        if source_carry is not None:
+            source_carry.stage_source(unpack_streams(source_x0, source_shapes)[0])
         if mixed_plan is not None:
             # Use all prefix frames as transient upscaler context. Its 3D attention
             # has no proven finite temporal receptive field permitting truncation.
@@ -1942,6 +1966,10 @@ def _run_progressive(
             transfer_mode=config.transfer_mode,
             input_mode="mixed_grid_low_suffix" if mixed else ("target_grid" if target_input else "source_grid"),
         )
+        if source_carry is not None:
+            returned_internal = _process_latent_in(base_model, result.clone(), target_shapes)
+            carry_receipt = source_carry.prepare_success(unpack_streams(returned_internal, target_shapes)[0])
+            binding.metrics.event("source_prefix_carry_prepared", **carry_receipt)
         return result
 
     except BaseException as exc:

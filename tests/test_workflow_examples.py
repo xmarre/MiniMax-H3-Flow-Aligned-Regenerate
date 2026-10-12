@@ -301,3 +301,26 @@ def test_progressive_source_input_canvas_workflow_is_loadable_shape():
     _assert_canvas_links_resolve(workflow, "H3ProgressiveHandoff")
     patch = next(node for node in workflow["nodes"] if node["type"] == "H3ProgressiveHandoff")
     assert patch["widgets_values"][0:2] == ["scale", 1.2]
+
+
+def test_full_stage_continuity_canvas_uses_current_widget_contract_and_saves_previews():
+    from h3_flow_regenerate.local_boundary_audit import H3FlowLocalBoundaryAudit
+
+    workflow = _load("full-stage-continuity.workflow.json")
+    assert workflow["version"] == 0.4
+    vae, node = workflow["nodes"]
+    assert vae["type"] == "VAELoader"
+    assert node["type"] == "H3FlowLocalBoundaryAudit"
+    assert workflow["links"] == [[1, vae["id"], 0, node["id"], 0, "VAE"]]
+    spec = H3FlowLocalBoundaryAudit.INPUT_TYPES()
+    widgets = {
+        name: kind for group in ("required", "optional") for name, kind in spec[group].items() if kind[0] != "VAE"
+    }
+    assert len(widgets) == len(node["widgets_values"])
+    values = dict(zip(widgets, node["widgets_values"], strict=True))
+    assert values["audit_scope"] == "full_stage_continuity"
+    assert values["save_stage_previews"] is True
+    assert values["feature_tracking_enabled"] is True
+    assert values["validate_full_video_decoder"] is False
+    assert values["bundle_path"] == ""
+    assert values["chunk_join_frame"] == 175
