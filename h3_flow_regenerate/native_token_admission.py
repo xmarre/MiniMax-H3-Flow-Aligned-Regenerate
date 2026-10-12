@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import importlib.metadata
 import sys
 
 import torch
@@ -141,8 +142,13 @@ class CoreTokenAdmissionObserver:
             record["unobserved"] = "multiple_core_calls"
             return
         try:
+            version = importlib.metadata.version("comfy-kitchen")
+            record["comfy_kitchen_version"] = version
+            if version != "0.2.37":
+                record["unobserved"] = "unsupported_comfy_kitchen_version"
+                return
             record.update(capture_token_admission(frame.f_locals))
-        except (KeyError, ValueError, TypeError, RuntimeError) as exc:
+        except Exception as exc:
             record["unobserved"] = type(exc).__name__ + ": " + str(exc)[:160]
 
     def summary(self):
@@ -182,6 +188,7 @@ class CoreTokenAdmissionObserver:
             "comparisons": pairs,
             "limitations": (
                 "Reads final installed-core token workspace after C return. "
+                "Only comfy-kitchen 0.2.37 layout is supported. "
                 "Does not prove equality of producer inputs or identify an internal CUDA launch. "
                 "GPU synchronization and profiling can affect scheduling. "
                 "Only one selected block/native prediction is observed per arm."
