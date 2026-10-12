@@ -103,7 +103,7 @@ class CoreTokenAdmissionObserver:
 
     @contextlib.contextmanager
     def observe(self, arm):
-        record = {"policy": POLICY, "calls": 0, "complete": False}
+        record = {"policy": POLICY, "entries": 0, "calls": 0, "complete": False}
         self.records[arm] = record
         previous = sys.getprofile()
         if previous is not None:
@@ -119,19 +119,22 @@ class CoreTokenAdmissionObserver:
             yield
         finally:
             sys.setprofile(previous)
-            if record["calls"] != 1:
+            if record["entries"] != 1 or record["calls"] != 1:
                 record["complete"] = False
-                record.setdefault("unobserved", "missing_or_multiple_core_calls")
+                record.setdefault("unobserved", "missing_or_multiple_chunked_wrapper_calls")
             elif "unobserved" in record:
                 record["complete"] = False
 
     @staticmethod
     def record_event(record, frame, event, arg):
-        if event != "return":
+        if event not in ("call", "return"):
             return
         if frame.f_code.co_name != "sol_attn_chunked":
             return
         if not frame.f_code.co_filename.replace("\\", "/").endswith(SOURCE_SUFFIX):
+            return
+        if event == "call":
+            record["entries"] += 1
             return
         record["calls"] += 1
         if "sol_attn_core" not in frame.f_code.co_names:
@@ -198,6 +201,6 @@ class CoreTokenAdmissionObserver:
                 "Only comfy-kitchen 0.2.37 layout is supported. "
                 "Does not prove equality of producer inputs or identify an internal CUDA launch. "
                 "GPU synchronization and profiling can affect scheduling. "
-                "Only one selected block/native prediction is observed per arm."
+                "One selected Python chunked wrapper entry and successful return are required per arm."
             ),
         }
