@@ -390,6 +390,7 @@ class LowReplayTrace:
         native_module_detail=False,
         native_projection_detail=False,
         native_qkv_detail=False,
+        native_token_detail=False,
     ):
         from .native_execution_trace import (
             NativeExecutionTrace,
@@ -397,6 +398,7 @@ class LowReplayTrace:
             validate_pair_block,
             validate_projection_detail,
             validate_qkv_detail,
+            validate_token_detail,
             validate_step,
         )
 
@@ -405,6 +407,9 @@ class LowReplayTrace:
         validate_module_detail(native_module_detail)
         validate_projection_detail(native_projection_detail)
         validate_qkv_detail(native_qkv_detail)
+        validate_token_detail(native_token_detail)
+        if native_token_detail and (native_step < 0 or native_pair_block < 0):
+            raise ValueError("low_native_trace_token_admission requires native step and pair block")
         if native_qkv_detail and not (native_module_detail and native_projection_detail):
             raise ValueError("low_native_trace_qkv_detail requires module and projection detail")
         if native_projection_detail and not native_module_detail:
@@ -421,6 +426,7 @@ class LowReplayTrace:
                 module_detail=native_module_detail,
                 projection_detail=native_projection_detail,
                 qkv_detail=native_qkv_detail,
+                token_detail=native_token_detail,
             )
             if native_step >= 0
             else None
@@ -899,6 +905,7 @@ def low_trace_scope(
     native_module_detail=False,
     native_projection_detail=False,
     native_qkv_detail=False,
+    native_token_detail=False,
 ):
     if _OWNER.get() is not None:
         yield _OWNER.get()
@@ -909,6 +916,7 @@ def low_trace_scope(
         native_module_detail=native_module_detail,
         native_projection_detail=native_projection_detail,
         native_qkv_detail=native_qkv_detail,
+        native_token_detail=native_token_detail,
     )
     token = _OWNER.set(trace)
     try:
@@ -925,7 +933,7 @@ def traced_partitioned(function):
     def wrapped(executor, guider, *args, **kwargs):
         if not guider.model_options.get("h3_flow_low_sampler_aba_v1", False):
             return function(executor, guider, *args, **kwargs)
-        from .native_execution_trace import MODULE_OPTION, OPTION, PAIR_OPTION, PROJECTION_OPTION, QKV_OPTION
+        from .native_execution_trace import MODULE_OPTION, OPTION, PAIR_OPTION, PROJECTION_OPTION, QKV_OPTION, TOKEN_OPTION
 
         with low_trace_scope(
             guider.model_options.get(OPTION, -1),
@@ -933,6 +941,7 @@ def traced_partitioned(function):
             guider.model_options.get(MODULE_OPTION, False),
             guider.model_options.get(PROJECTION_OPTION, False),
             guider.model_options.get(QKV_OPTION, False),
+            guider.model_options.get(TOKEN_OPTION, False),
         ):
             return function(executor, guider, *args, **kwargs)
 
