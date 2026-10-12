@@ -526,7 +526,8 @@ class NativeExecutionTrace:
                             self.observe(trace, layer, layers, name, result, block, options, previous)
 
                     handles.append(module.register_forward_hook(callback))
-            with self.token_admission.observe(trace.arm) if self.token_admission is not None else contextlib.nullcontext():
+            token_scope = self.token_admission.observe(trace.arm) if self.token_admission else contextlib.nullcontext()
+            with token_scope:
                 yield
         finally:
             for handle in reversed(handles):
