@@ -115,8 +115,8 @@ jobs:
           COMFYUI_ROOT: ${{ github.workspace }}/.contracts/ComfyUI
         run: |
           python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio
-          python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo 'transformers>=4.50.3' sentencepiece torchsde
-          python -m pytest tests/test_mixed_grid.py tests/test_decode_context.py tests/test_boundary_window_evidence.py tests/test_local_boundary_audit.py -q
+          python -m pip install pytest numpy scipy einops psutil safetensors tqdm pillow comfy-kitchen comfy-aimdo 'transformers>=4.50.3' sentencepiece torchsde opencv-python-headless
+          python -m pytest tests/test_mixed_grid.py tests/test_decode_context.py tests/test_boundary_window_evidence.py tests/test_local_boundary_audit.py tests/test_prefix_projection_audit.py tests/test_source_prefix_projection.py tests/test_source_prefix_carry.py tests/test_feature_background_tracking.py -q
       - name: Validate partitioned exact-prefix cross-repo contracts
         run: |
           python tools/check_partitioned_exact_prefix_contracts.py \
@@ -167,6 +167,7 @@ jobs:
             tests/test_transfer_lattice.py \
             tests/test_transfer_lattice_source_contract.py \
             tests/test_flow_residual_lattice.py \
+            tests/test_image_residual.py \
             tests/test_partitioned_seam_diagnostics.py \
             tests/test_residual_evidence_replay.py \
             .contracts/Upscaler/tests/test_h3_patch_lattice.py
@@ -209,6 +210,38 @@ jobs:
             tests/test_partitioned_target_band_native.py \
             tests/test_partitioned_target_band_domain.py \
             tests/test_partitioned_target_band_e2e.py \
+            tests/test_low_sampler_trace.py \
+            tests/test_low_sampler_ab.py \
+            tests/test_uniform_prefix_context.py \
             tests/test_partitioned_native_attention.py \
             .contracts/VDNPartitioned/tests/test_partitioned_attention_provider.py
 
+
+  sol-probe-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install CUDA compiler for compile-only SM120 validation
+        run: >-
+          python -m pip install nvidia-cuda-nvcc==13.0.88 nvidia-cuda-runtime==13.0.96
+          nvidia-cuda-cccl==13.0.85 nvidia-cuda-crt==13.0.88 nvidia-nvvm==13.0.88
+      - name: Compile pinned CUDA stage probe (no GPU execution)
+        run: |
+          CUDA_BIN="$(python -c "import site; print(site.getsitepackages()[0] + '/nvidia/cu13/bin')")"
+          export PATH="$CUDA_BIN:$PATH"
+          python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          spec = importlib.util.spec_from_file_location("sol_probe", "tools/reproduce_sol_attn_determinism.py")
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          _, receipt = module.build_probe(Path(".sol-probe-build"), Path(".sol-probe-source"), arch="sm_120")
+          print(receipt)
+          print("Source compilation and library loading only; CUDA runtime behavior untested.")
+          PY

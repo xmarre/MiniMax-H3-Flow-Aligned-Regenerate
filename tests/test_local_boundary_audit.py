@@ -353,7 +353,17 @@ def test_extended_replay_validates_saved_source_view_and_preserves_native_tail_b
     assert before == {p.name: p.read_bytes() for p in directory.iterdir()}
 
 
-def test_uniform_source_bundle_has_no_band_or_padded_carrier_requirement(source_bundle):
+@pytest.mark.parametrize(
+    "projection_policy",
+    [
+        None,
+        "h3_dense_patch_center_lattice_v2",
+        "half_pixel_latent_v1",
+        "native_vae_rgb_roundtrip_v1",
+        "native_source_carry_v1",
+    ],
+)
+def test_uniform_source_bundle_has_no_band_or_padded_carrier_requirement(source_bundle, projection_policy):
     directory, manifest, source = source_bundle
     metadata = manifest["metadata"]
     metadata.update(
@@ -365,6 +375,26 @@ def test_uniform_source_bundle_has_no_band_or_padded_carrier_requirement(source_
         low_probe_native_carrier_decodable=True,
     )
     manifest["tensor_bytes"].pop("low_probe_native_carrier_clean_full")
+    if projection_policy is not None:
+        metadata["source_prefix_projection_policy"] = projection_policy
+    if projection_policy in ("half_pixel_latent_v1", "native_vae_rgb_roundtrip_v1", "native_source_carry_v1"):
+        entry = manifest["tensor_bytes"]["authoritative_prefix_full"]
+        prefix = torch.frombuffer(bytearray((directory / entry["file"]).read_bytes()), dtype=torch.float32)
+        prefix = prefix.reshape(entry["shape"])
+        source = source.clone()
+        source[:, :, :12] = audit.resize_spatial_5d(prefix, 2, 4, mode="bicubic")
+        if projection_policy in ("native_vae_rgb_roundtrip_v1", "native_source_carry_v1"):
+            from h3_flow_regenerate.decode_context import video_latent_fingerprint
+
+            # Native reconstruction cannot be reproduced with latent resize.
+            source[:, :, :12] += 0.04
+            metadata["source_prefix_projection"] = {
+                "policy": projection_policy,
+                "prefix_t": 12,
+                "authoritative_prefix": video_latent_fingerprint(prefix),
+                "projected_prefix": video_latent_fingerprint(source[:, :, :12]),
+            }
+        write_operand(directory, manifest, "source_probe_clean_full", source)
     (directory / "manifest.json").write_text(json.dumps(manifest))
     plan, stages, _identity = audit.load_replay_operands(directory, 175, include_source=True)
     assert plan["head_t"] == plan["prefix_t"] == 12
@@ -372,6 +402,110 @@ def test_uniform_source_bundle_has_no_band_or_padded_carrier_requirement(source_
     report = audit.audit_local_boundary(FakeVAE(), directory, 175, lambda x: x)
     assert report["extra_vae_calls"] == 5
     assert report["stages"]["provider"]["frame_labels"] == list(range(171, 196))
+    if projection_policy == "native_source_carry_v1":
+        extended = audit.audit_local_boundary(
+            FakeVAE(), directory, 175, lambda x: x, scope="transfer_and_decoder_context"
+        )
+        state = extended["stages"]["source_grid"]
+        assert state["state_role"] == "uniform_source_with_previous_native_clean_prediction_head"
+        assert state["native_reduced_grid_generation_for_head"] is True
+        paired = extended["source_target_prefix_context"]
+        assert extended["extra_vae_calls"] == 18
+        assert paired["frame_labels"] == list(range(170, 175))
+        assert paired["token_contexts"] == [[5, 12], [10, 17]]
+        assert paired["preceding_window_contains_generated_suffix"] is False
+        assert paired["following_window_contains_generated_suffix"] is True
+        assert paired["extra_vae_calls"] == 0
+        assert paired["reuses_existing_window_decodes"] is True
+    if projection_policy in ("native_vae_rgb_roundtrip_v1", "native_source_carry_v1"):
+        metadata["source_prefix_projection"]["projected_prefix"]["sha256_float32"] = "0" * 64
+        (directory / "manifest.json").write_text(json.dumps(manifest))
+        with pytest.raises(ValueError, match="projection receipt"):
+            audit.load_replay_operands(directory, 175, include_source=True)
+
+
+@pytest.mark.parametrize("prefix_t", [2, 12])
+def test_native_prefix_pair_separates_owned_state_from_future_decoder_context(source_bundle, monkeypatch, prefix_t):
+    from h3_flow_regenerate.decode_context import video_latent_fingerprint
+
+    directory, manifest, source = source_bundle
+    entry = manifest["tensor_bytes"]["authoritative_prefix_full"]
+    prefix = torch.frombuffer(bytearray((directory / entry["file"]).read_bytes()), dtype=torch.float32)
+    prefix = prefix.reshape(entry["shape"])[:, :, :prefix_t]
+    write_operand(directory, manifest, "authoritative_prefix_full", prefix)
+    mask = torch.ones(1, 24, 22, *prefix.shape[-2:])
+    mask[:, :, :prefix_t] = 0
+    write_operand(directory, manifest, "initial_high_video_mask_full", mask)
+    source = source.clone()
+    source[:, :, :prefix_t] = audit.resize_spatial_5d(prefix, 2, 4, mode="bicubic") + 0.04
+    metadata = manifest["metadata"]
+    metadata.update(
+        spatial_stage_control="progressive_uniform_source",
+        provider_clean_provenance="actual_learned_provider_uniform_source",
+        target_band_tokens=0,
+        target_band_transfer_start_t=prefix_t,
+        low_probe_native_carrier_layout="uniform_source",
+        low_probe_native_carrier_decodable=True,
+        source_prefix_projection_policy="native_source_carry_v1",
+        source_prefix_projection={
+            "policy": "native_source_carry_v1",
+            "prefix_t": prefix_t,
+            "authoritative_prefix": video_latent_fingerprint(prefix),
+            "projected_prefix": video_latent_fingerprint(source[:, :, :prefix_t]),
+        },
+    )
+    metadata["window"].update(prefix_t=prefix_t, decoded_trim_frames=5 if prefix_t == 2 else 39)
+    write_operand(directory, manifest, "source_probe_clean_full", source)
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(audit, "geometry_comparison", lambda a, b, labels: {"frames": labels})
+
+    class ContextVAE(FakeVAE):
+        def decode(self, value):
+            # Future tokens affect decoded past pixels, independently of whether
+            # the two owned prefix states agree. No learned-quality claim.
+            return super().decode(value) + value.mean()
+
+    originals = {p.name: p.read_bytes() for p in directory.iterdir()}
+    rng = torch.random.get_rng_state().clone()
+    vae = ContextVAE()
+    baseline = audit.audit_local_boundary(vae, directory, 175, lambda v: v, scope="transfer_and_decoder_context")
+    assert baseline["extra_vae_calls"] == len(vae.inputs) == 18
+    assert originals == {p.name: p.read_bytes() for p in directory.iterdir()}
+    assert torch.equal(torch.random.get_rng_state(), rng)
+    if prefix_t == 2:
+        # A two-token prefix has no standalone seven-token preceding window.
+        assert "source_target_prefix_context" not in baseline
+        return
+    pairs = baseline["source_target_prefix_context"]["comparisons"]
+    expected_bias = float(prefix[:, :, 5:12].mean() - source[:, :, 5:12].mean())
+    assert expected_bias < -0.03
+    assert pairs["source_to_target_without_future"]["luma_mean_change"] == pytest.approx([expected_bias] * 5, abs=1e-6)
+    source[:, :, prefix_t:] += 0.07
+    write_operand(directory, manifest, "source_probe_clean_full", source)
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    vae = ContextVAE()
+    changed = audit.audit_local_boundary(vae, directory, 175, lambda v: v, scope="transfer_and_decoder_context")
+    assert changed["extra_vae_calls"] == len(vae.inputs) == 18
+    later = changed["source_target_prefix_context"]["comparisons"]
+    assert later["source_to_target_without_future"] == pairs["source_to_target_without_future"]
+    assert (
+        later["source_future_context_change"]["rgb_difference_rms"]
+        != pairs["source_future_context_change"]["rgb_difference_rms"]
+    )
+    assert later["target_future_context_change"] == pairs["target_future_context_change"]
+    assert torch.equal(torch.random.get_rng_state(), rng)
+
+
+@pytest.mark.parametrize("policy", ["unknown", "half_pixel_latent_v1"])
+def test_extended_replay_rejects_unsupported_projection_without_decoding(source_bundle, policy):
+    directory, manifest, _source = source_bundle
+    # Half-pixel is valid only for a native uniform clip, not a mixed band view.
+    manifest["metadata"]["source_prefix_projection_policy"] = policy
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    vae = FakeVAE()
+    with pytest.raises(ValueError, match="source prefix projection policy"):
+        audit.audit_local_boundary(vae, directory, 175, lambda x: x, scope="transfer_and_decoder_context")
+    assert vae.inputs == []
 
 
 @pytest.mark.parametrize("failure", ["head", "tail", "grid", "shape", "hash"])
@@ -462,6 +596,9 @@ def test_audit_uses_connected_vae_sequentially_and_returns_only_numerical_data(b
     rng = torch.random.get_rng_state().clone()
     report = audit.audit_local_boundary(vae, directory, 175, process_out)
     assert report["policy"] == "local_target_band_native_window_audit_v2"
+    assert report["static_roi_profile"] == "off"
+    assert report["static_roi_measurement_enabled"] is False
+    assert report["static_roi_bounds_xyxy"] == {}
     assert report["extra_vae_calls"] == 5
     assert report["temporal_blend_reproduced_for_measured_frames"] is True
     assert report["decoded_pixels_saved"] is False
@@ -904,3 +1041,69 @@ def test_audit_admission_accounts_for_core_weight_reserve_and_device(monkeypatch
     monkeypatch.setattr(management, "load_models_gpu", lambda *a, **kw: pytest.fail("insufficient admission budget"))
     with pytest.raises(RuntimeError, match="without unloading other models"):
         audit._resident_decode(vae, torch.zeros(1, 24, 7, 2, 3))
+
+
+def test_full_video_decoder_context_validates_same_saved_pixels_without_production_mutation(bundle):
+    directory, _manifest, _video = bundle
+    before = {path.name: path.read_bytes() for path in directory.iterdir()}
+    vae = FakeVAE()
+    report = audit.audit_local_boundary(
+        vae,
+        directory,
+        175,
+        lambda latent: latent,
+        validate_full_video_decoder=True,
+    )
+    comparison = report["full_video_decoder_context_validation"]
+    assert report["full_video_decoder_comparison_requested"] is True
+    assert report["extra_vae_calls"] == 6
+    assert len(vae.inputs) == 6
+    assert tuple(vae.inputs[-1].shape) == tuple(_video.shape)
+    assert torch.equal(vae.inputs[-1], _video)
+    assert comparison["policy"] == "h3_native_full_vs_crop_decoder_window_v1"
+    assert comparison["full_decoded_global_origin"] == 136
+    assert comparison["cropped_replay_global_origin"] == 153
+    assert comparison["frame_labels"] == list(range(170, 196))
+    assert comparison["full_decoded_frames"] == 73
+    assert comparison["same_saved_final_clean_state"] is True
+    assert comparison["same_connected_native_video_vae"] is True
+    assert comparison["extra_h3_nfe"] == 0
+    assert comparison["extra_vae_calls"] == 1
+    assert comparison["per_frame_rgb_difference_rms"] == [0.0] * 26
+    assert comparison["per_frame_luma_mean_change"] == [0.0] * 26
+    assert not comparison["production_output_modified"]
+    assert before == {path.name: path.read_bytes() for path in directory.iterdir()}
+    json.dumps(report, allow_nan=False)
+
+
+def test_full_video_decoder_context_defaults_off_with_no_extra_decode(bundle):
+    directory, _manifest, _video = bundle
+    vae = FakeVAE()
+    report = audit.audit_local_boundary(vae, directory, 175, lambda latent: latent)
+    assert report["full_video_decoder_comparison_requested"] is False
+    assert "full_video_decoder_context_validation" not in report
+    assert report["extra_vae_calls"] == 5
+    assert len(vae.inputs) == 5
+
+
+def test_full_video_decoder_validation_rejects_non_boolean_and_high_tone_scope(bundle):
+    directory, _manifest, _video = bundle
+    vae = FakeVAE()
+    with pytest.raises(TypeError, match="boolean"):
+        audit.audit_local_boundary(
+            vae,
+            directory,
+            175,
+            lambda v: v,
+            validate_full_video_decoder=1,
+        )
+    with pytest.raises(ValueError, match="requires stage_continuity"):
+        audit.audit_local_boundary(
+            vae,
+            directory,
+            175,
+            lambda v: v,
+            scope="high_prediction_tone",
+            validate_full_video_decoder=True,
+        )
+    assert vae.inputs == []
