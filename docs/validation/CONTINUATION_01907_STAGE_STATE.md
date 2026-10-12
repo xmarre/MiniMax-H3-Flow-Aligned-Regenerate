@@ -71,3 +71,7 @@ No trained VAE or CUDA device was available for this stage decode in the
 review environment; its final pixel result remains unmeasured here. Flow #99
 remains experimental until decoded stage evidence and audiovisual acceptance
 support the continuation behavior.
+
+The subsequent trained-VAE replay completed all seven stages successfully.
+[Full-stage findings](CONTINUATION_01907_FULL_STAGE.md) supersede the outstanding
+stage-decode qualification above; final audiovisual acceptance remains open.

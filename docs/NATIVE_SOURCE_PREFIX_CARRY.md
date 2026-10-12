@@ -156,3 +156,9 @@ It saves optional matched PNG frames and measures absolute same-time photometry
 and structure, including the first retained continuation frame. Use it when a
 source-prefix comparison is already qualified and the remaining question is
 where target-grid continuation changes develop.
+
+The [01907 full-stage audit](validation/CONTINUATION_01907_FULL_STAGE.md) completed
+this replay on the captured native-source continuation. It measures source-stage
+expansion and darkening, transfer detail loss, decoder effects of prefix
+restoration, and substantial subsequent detail recovery. It does not qualify a
+final seam correction or justify promoting geometric/tone extrapolation.
