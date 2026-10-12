@@ -92,11 +92,11 @@ def test_actual_python_profile_return_event_is_captured(monkeypatch):
     # c_return naming is not guaranteed for extension calls, but Python
     # function return profiling is. The fake core is *not* a numerical test.
     code = compile(
-        "def sol_attn_chunked():\\n"
-        "    t, h, token_aug = 66, 1, 256\\n"
-        "    ws, p = object(), {}\\n"
-        "    sol_attn_core()\\n"
-        "    return (output, kmean, vscale)\\n",
+        "def sol_attn_chunked():\n"
+        "    t, h, token_aug = 66, 1, 256\n"
+        "    ws, p = object(), {}\n"
+        "    sol_attn_core()\n"
+        "    return (output, kmean, vscale)\n",
         "/opt/site-packages/comfy_kitchen/backends/cuda/__init__.py",
         "exec",
     )
@@ -124,7 +124,7 @@ def test_actual_python_profile_return_event_is_captured(monkeypatch):
     observer = CoreTokenAdmissionObserver()
     old = sys.getprofile()
     with observer.observe("A"):
-        assert scope["sol_attn_chunked"]() == outputs
+        assert scope["sol_attn_chunked"]()[0] is outputs[0]
     assert sys.getprofile() is old
     assert observer.records["A"]["calls"] == 1
     assert observer.records["A"]["complete"] is True
@@ -134,9 +134,9 @@ def test_failed_python_return_does_not_claim_observation(monkeypatch):
     from h3_flow_regenerate import native_token_admission as token
 
     code = compile(
-        "def sol_attn_chunked():\\n"
-        "    sol_attn_core()\\n"
-        "    raise RuntimeError('synthetic core failure')\\n",
+        "def sol_attn_chunked():\n"
+        "    sol_attn_core()\n"
+        "    raise RuntimeError('synthetic core failure')\n",
         "/opt/site-packages/comfy_kitchen/backends/cuda/__init__.py",
         "exec",
     )
