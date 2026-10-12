@@ -630,8 +630,11 @@ a selected nonnegative step and pair block and `low_sampler_aba=true`.
 Unlike full QKV tracing, it does not require any module/projection detail.
 
 The observation uses a temporary **thread-local Python profile callback**
-to inspect the actual `sol_attn_chunked` Python frame immediately after its
-`_C.sol_attn_core` invocation returns. It never patches
+to inspect the actual `sol_attn_chunked` Python frame at successful Python
+return, after its unconditional `_C.sol_attn_core` invocation. It records
+wrapper entries separately from completed returns. A Python `c_return`
+callback for the extension method is **not** required (the previous
+instrumentation failed to observe it in real H3 run 01905). It never patches
 `comfy_kitchen.sol_attn_chunked`, replaces the extension, changes model
 options, alters token budgets, or initiates additional forwards. It restores
 the prior profiler in `finally`; an already-active profiler is reported
@@ -645,7 +648,7 @@ top histogram-bin peak, and full SHA256 of reservation counts,
 histogram and canonical retained token IDs. Unwritten list slots are never
 loaded into the digest. Each full receipt is bounded to 32 MiB of Core
 workspace data, never exports complete QKV, weights or workspace, and
-requires exactly one verified Core call per selected arm. Missing or
+requires exactly one source-qualified Python wrapper entry and successful return per selected arm. Missing or
 extra calls, unsupported geometry, absent Core source, exceptions and
 pre-existing Python profilers prevent a completeness claim.
 
