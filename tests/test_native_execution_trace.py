@@ -172,8 +172,11 @@ def test_actual_core_token_admission_is_default_off_and_explicitly_scoped():
         # Token-only mode never hashes native BF16 hidden state.
         observer.observe(trace, 45, 50, "input", torch.ones(2, 4), obj, {}, None)
     assert observer.arms == {}
-    receipt = observer.summary()["internal_token_admission"]["selected_native_core_calls"]["A"]
+    result = observer.summary()
+    receipt = result["internal_token_admission"]["selected_native_core_calls"]["A"]
     assert not receipt["complete"] and receipt["calls"] == 0
+    assert result["comparisons"]["A_replay"]["packed_hidden_unobserved_by_design"]
+    assert result["comparisons"]["A_replay"]["missing_selected_native_call"] is None
 
 
 def test_real_core_flow_block_chain_preserves_av_outputs_and_captures_inside_lease(monkeypatch):
