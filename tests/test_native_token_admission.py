@@ -87,9 +87,8 @@ def test_thread_profile_restores_on_failure_and_missing_call():
     observer = CoreTokenAdmissionObserver()
     old = sys.getprofile()
     try:
-        with pytest.raises(ZeroDivisionError):
-            with observer.observe("A"):
-                raise ZeroDivisionError()
+        with pytest.raises(ZeroDivisionError), observer.observe("A"):
+            raise ZeroDivisionError()
         assert sys.getprofile() is old
         assert observer.records["A"]["complete"] is False
         assert observer.records["A"]["unobserved"] == "missing_or_multiple_core_calls"
