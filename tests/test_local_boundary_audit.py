@@ -1107,3 +1107,135 @@ def test_full_video_decoder_validation_rejects_non_boolean_and_high_tone_scope(b
             validate_full_video_decoder=True,
         )
     assert vae.inputs == []
+
+
+@pytest.fixture
+def full_uniform_bundle(source_bundle):
+    from h3_flow_regenerate.decode_context import video_latent_fingerprint
+
+    directory, manifest, source = source_bundle
+    entry = manifest["tensor_bytes"]["authoritative_prefix_full"]
+    prefix = torch.frombuffer(bytearray((directory / entry["file"]).read_bytes()), dtype=torch.float32)
+    prefix = prefix.reshape(entry["shape"])
+    manifest["metadata"].update(
+        spatial_stage_control="progressive_uniform_source",
+        provider_clean_provenance="actual_learned_provider_uniform_source",
+        target_band_tokens=0,
+        target_band_transfer_start_t=12,
+        low_probe_native_carrier_decodable=True,
+        source_prefix_projection_policy="native_source_carry_v1",
+        source_prefix_projection={
+            "policy": "native_source_carry_v1",
+            "prefix_t": 12,
+            "authoritative_prefix": video_latent_fingerprint(prefix),
+            "projected_prefix": video_latent_fingerprint(source[:, :, :12]),
+        },
+    )
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    return directory, manifest, source
+
+
+def test_full_stage_replay_preserves_complete_timelines_and_native_pixel_origin(full_uniform_bundle, monkeypatch):
+    directory, _manifest, source = full_uniform_bundle
+    originals = {p.name: p.read_bytes() for p in directory.iterdir()}
+    monkeypatch.setattr(audit, "geometry_comparison", lambda a, b, labels: {"frames": labels})
+
+    class TimelineVAE(FakeVAE):
+        def decode(self, value):
+            pixels = super().decode(value)
+            # Pixel value identifies its full-native temporal position.
+            times = torch.arange(pixels.shape[1], dtype=pixels.dtype) / 100
+            return pixels + times[None, :, None, None, None]
+
+    vae = TimelineVAE()
+    seen = {}
+
+    def sink(pixels, labels, selected):
+        seen.update(pixels=pixels, labels=labels, selected=selected)
+        return {"frame_labels": selected}
+
+    rng = torch.random.get_rng_state().clone()
+    result = audit.audit_local_boundary(
+        vae, directory, 175, lambda x: x, scope="full_stage_continuity", preview_sink=sink
+    )
+    assert result["decoder_context"] == "full_saved_video"
+    assert result["extra_vae_calls"] == len(vae.inputs) == 6
+    assert all(value.shape[2] == 22 for value in vae.inputs)
+    assert torch.equal(vae.inputs[0], source)
+    assert seen["labels"] == list(range(170, 196))
+    assert seen["selected"] == [174, 175, 180, 190]
+    # Chunk origin is 175-39=136; f170 is pixel 34 and f175 is pixel 39.
+    for frames in seen["pixels"].values():
+        assert float(frames[0].mean()) == pytest.approx(0.34, abs=1e-6)
+        assert float(frames[5].mean()) == pytest.approx(0.39, abs=1e-6)
+    assert result["rendered_acceptance"] is False
+    assert originals == {p.name: p.read_bytes() for p in directory.iterdir()}
+    assert torch.equal(torch.random.get_rng_state(), rng)
+
+
+def test_full_stage_rejects_band_bundle_before_vae(bundle):
+    vae = FakeVAE()
+    with pytest.raises(ValueError, match="uniform-source"):
+        audit.audit_local_boundary(vae, bundle[0], 175, lambda x: x, scope="full_stage_continuity")
+    assert vae.inputs == []
+
+
+def test_full_stage_rejects_redundant_full_decode_before_vae(full_uniform_bundle):
+    vae = FakeVAE()
+    with pytest.raises(ValueError, match="already decodes"):
+        audit.audit_local_boundary(
+            vae,
+            full_uniform_bundle[0],
+            175,
+            lambda x: x,
+            scope="full_stage_continuity",
+            validate_full_video_decoder=True,
+        )
+    assert vae.inputs == []
+
+
+def test_previews_save_native_grids_and_selected_times_without_changing_pixels(tmp_path):
+    from PIL import Image
+
+    labels = [174, 175, 180, 190]
+    source = torch.rand(4, 80, 96, 3)
+    target = torch.rand(4, 112, 128, 3)
+    originals = [x.clone() for x in (source, target)]
+    report = audit._save_stage_previews(tmp_path, {"source_grid": source, "final": target}, labels, labels)
+    assert len(report["images"]) == 8
+    assert report["extra_vae_calls"] == 0
+    assert report["assembled_production_video"] is False
+    for entry in report["images"]:
+        frames = source if entry["stage"] == "source_grid" else target
+        path = tmp_path / entry["subfolder"] / entry["filename"]
+        with Image.open(path) as image:
+            assert image.size == (frames.shape[2], frames.shape[1])
+            import numpy as np
+
+            expected = frames[labels.index(entry["frame"])].mul(255).round().to(torch.uint8).numpy()
+            assert np.array_equal(np.asarray(image), expected)
+    assert all(torch.equal(a, b) for a, b in zip((source, target), originals, strict=True))
+
+
+def test_absolute_stage_pairs_include_join_and_do_not_normalize_tone_bias(bundle, monkeypatch):
+    directory, _manifest, _video = bundle
+    monkeypatch.setattr(audit, "geometry_comparison", lambda a, b, labels: {"frames": labels})
+
+    class BiasVAE(FakeVAE):
+        def decode(self, value):
+            result = super().decode(value)
+            return result + 0.2 + (0.03 if len(self.inputs) > 1 else 0.0)
+
+    report = audit.audit_local_boundary(
+        BiasVAE(),
+        directory,
+        175,
+        lambda x: x,
+        static_roi_profile="custom",
+        static_roi_json='{"left":[0,0,0.5,1],"right":[0.5,0,1,1]}',
+    )
+    pair = report["absolute_same_frame_stage_pairs"]["provider_to_pre_high"]
+    assert pair["normalized_on_prefix"] is False
+    assert pair["frame_labels"] == list(range(170, 196))
+    assert pair["luma_mean_change"] == pytest.approx([0.03] * 26, abs=1e-6)
+    assert pair["regions"]["left"]["same_frame_measurements"]["175"]["luma_mean_change"] == pytest.approx(0.03)
