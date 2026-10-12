@@ -65,7 +65,7 @@ landmark selections, prefix rendering and encoding intervene.
 Replay the existing boundary bundle with `full_stage_continuity`, static ROIs
 and saved previews as described in [the protocol](../FULL_STAGE_CONTINUITY.md).
 This measures the source→provider→corrected handoff→first high→final transitions
-through complete native decoder contexts. It requires six VAE calls and zero
+through complete native decoder contexts. It requires seven VAE calls and zero
 H3 evaluations. No repeated low A/B or CUDA token-admission run is needed.
 No trained VAE or CUDA device was available for this stage decode in the
 review environment; its final pixel result remains unmeasured here. Flow #99

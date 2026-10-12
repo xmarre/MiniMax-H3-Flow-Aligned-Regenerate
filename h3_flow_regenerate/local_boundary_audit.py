@@ -253,6 +253,11 @@ def load_replay_operands(
             prefix.contiguous().view(torch.int32),
         ):
             raise ValueError(f"saved stage changed the authoritative prefix: {name}")
+        if include_full_stages and stage == "provider":
+            # Keep the native provider prefix as a separate arm. Otherwise
+            # source-to-provider differences combine transfer with the decoder's
+            # response to restoring a different authoritative prefix.
+            stages["provider_native"] = value.clone()
         # Restore only carried context for a fair decoded stage comparison.
         # The native band and transferred tail remain each stage's saved bytes.
         value[:, :, : plan["prefix_t"]] = prefix
@@ -695,7 +700,9 @@ def audit_local_boundary(
         "full_video_decoder_comparison_requested": validate_full_video_decoder,
         "feature_tracking_enabled": feature_tracking_enabled,
         "decoder_context": "full_saved_video" if full_stages else "cropped_native_windows",
-        "authoritative_target_prefix_restored_for_target_stages": True,
+        "authoritative_target_prefix_restored_for_target_stages": [
+            name for name in stages if name not in ("source_grid", "provider_native")
+        ],
         "fps": 24,
         **identity,
         "plan": plan,
@@ -824,7 +831,7 @@ def audit_local_boundary(
         }
         del source_left, source_right, target_left, target_right
         prefix_windows.clear()
-    pairs = [
+    pairs = ([("provider_native", "provider")] if "provider_native" in pixels else []) + [
         ("provider", "pre_high"),
         ("pre_high", "first_high_before_flow"),
         ("first_high_before_flow", "first_high_after_flow"),
@@ -860,7 +867,11 @@ def audit_local_boundary(
     if static_rois:
         report["static_background_same_frame_stage_pairs"] = {}
         report["absolute_same_frame_stage_pairs"] = {}
-        roi_pairs = ([("source_grid", "provider")] if "source_grid" in pixels else []) + pairs
+        roi_pairs = (
+            [("source_grid", "provider_native" if "provider_native" in pixels else "provider")]
+            if "source_grid" in pixels
+            else []
+        ) + pairs
         for left, right in roi_pairs:
             if left not in pixels or right not in pixels:
                 continue
@@ -1096,7 +1107,7 @@ class H3FlowLocalBoundaryAudit:
                             "adds the saved reduced-grid view and same-time comparisons of both decoder windows. "
                             "High prediction tone uses two native-window decodes per captured high call, with "
                             "actual/forecast provenance and paired before/after Flow measurements. "
-                            "Full stage continuity uses six full-video decodes for uniform-source bundles, "
+                            "Full stage continuity uses seven full-video decodes for uniform-source bundles, "
                             "preserving each saved clip's complete native decoder context."
                         ),
                     },

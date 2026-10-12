@@ -14,18 +14,19 @@ background regions that remain visible and static in the captured scene. The
 example room profile is only appropriate for its bookshelf/picture/curtain scene;
 otherwise choose `custom` and provide fractional XYXY rectangles.
 
-The scope decodes six complete saved timelines sequentially:
+The scope decodes seven complete saved timelines sequentially:
 
 1. Native source clean prediction at the handoff sigma.
-2. Learned provider clean output.
-3. Corrected clean handoff before high sampling.
-4. First high prediction before Flow guidance.
-5. First high prediction after Flow guidance.
-6. Final high-refined clean output.
+2. Learned provider clean output with its original native prefix.
+3. That provider output with the authoritative target prefix restored.
+4. Corrected clean handoff before high sampling.
+5. First high prediction before Flow guidance.
+6. First high prediction after Flow guidance.
+7. Final high-refined clean output.
 
 Every decode starts at native token zero. Global frame labels account for the
-protected context trimmed from the continuation. Target-grid stages use the
-same authoritative prefix; the source stage retains its hash-verified source
+protected context trimmed from the continuation. Target-grid comparison stages use the
+same authoritative prefix, except the explicit `provider_native` arm; the source stage retains its hash-verified source
 prefix. The report identifies full decoder input lengths and origins, and
 measures matching frame times from the available local boundary interval.
 This avoids treating a shorter replay's artificial clip origin as full-video
@@ -50,11 +51,13 @@ report records each filename, stage, frame, dimensions and quantization. No
 extra VAE call is introduced by saving previews. Default settings continue to
 save only the numerical report.
 
-Use provider→pre-high to inspect clean correction, pre-high→first-high to inspect
+Use source→provider-native to inspect learned transfer with its native prefix,
+provider-native→provider to isolate exact-prefix restoration and decoder response,
+and provider→pre-high to inspect clean correction, pre-high→first-high to inspect
 initial refinement, before→after Flow to inspect guidance, and first-high→final
-to inspect subsequent refinement. Source→provider also includes the deliberate
-change from source prefix to authoritative target prefix and the VAE's response
-to that changed context; it is not an isolated measurement of upscaler error.
+to inspect subsequent refinement. These separate pairs prevent attribution of exact-prefix decoder effects to
+learned transfer. Source and provider still use different latent grids and VAE
+representations; their fit differences alone are not causal camera transforms.
 
 Decoded pre-join pixels are discarded context from the current continuation,
 not the preceding chunk's assembled production pixels. Image fits are not camera

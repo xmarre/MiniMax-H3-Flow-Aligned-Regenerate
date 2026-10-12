@@ -1166,9 +1166,13 @@ def test_full_stage_replay_preserves_complete_timelines_and_native_pixel_origin(
         vae, directory, 175, lambda x: x, scope="full_stage_continuity", preview_sink=sink
     )
     assert result["decoder_context"] == "full_saved_video"
-    assert result["extra_vae_calls"] == len(vae.inputs) == 6
+    assert result["extra_vae_calls"] == len(vae.inputs) == 7
     assert all(value.shape[2] == 22 for value in vae.inputs)
     assert torch.equal(vae.inputs[0], source)
+    # Provider-native prefix is preserved separately from exact-prefix replay.
+    assert not torch.equal(vae.inputs[1][:, :, :12], vae.inputs[2][:, :, :12])
+    assert torch.equal(vae.inputs[1][:, :, 12:], vae.inputs[2][:, :, 12:])
+    assert "provider_native_to_provider" in result["comparisons"]
     assert seen["labels"] == list(range(170, 196))
     assert seen["selected"] == [174, 175, 180, 190]
     # Chunk origin is 175-39=136; f170 is pixel 34 and f175 is pixel 39.

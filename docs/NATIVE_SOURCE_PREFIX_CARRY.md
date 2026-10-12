@@ -150,7 +150,7 @@ require the full rendered sequence; these CPU checks cannot establish them.
 
 ### Inspect source-to-target evolution with complete decoder context
 
-[Full stage continuity](FULL_STAGE_CONTINUITY.md) replays the six saved source,
+[Full stage continuity](FULL_STAGE_CONTINUITY.md) replays the seven saved source,
 transfer and high-stage timelines with their complete native decoder context.
 It saves optional matched PNG frames and measures absolute same-time photometry
 and structure, including the first retained continuation frame. Use it when a

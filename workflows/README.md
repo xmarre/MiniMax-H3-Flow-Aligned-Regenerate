@@ -54,5 +54,5 @@ Use the suffixes as the contract:
 loads the production native video VAE and runs the existing Local Boundary Audit
 on a saved uniform-source **boundary** bundle. Set the bundle path and assembled
 join frame before execution. It saves a numerical report and matched stage PNGs
-without H3 generation. Full-video decoder context is retained for all six stages;
+without H3 generation. Full-video decoder context is retained for all seven stages;
 see [the protocol and interpretation limits](../docs/FULL_STAGE_CONTINUITY.md).
