@@ -147,3 +147,12 @@ Native Core/Sol integration tests exercise the selected source bytes, unchanged
 suffix initialization and protected AV, sampler masks/schedules, call budgets
 and capture replay. Trained-weight CUDA quality and repeated-run residency
 require the full rendered sequence; these CPU checks cannot establish them.
+
+### Inspect source-to-target evolution with complete decoder context
+
+[Full stage continuity](FULL_STAGE_CONTINUITY.md) replays the six saved source,
+transfer and high-stage timelines with their complete native decoder context.
+It saves optional matched PNG frames and measures absolute same-time photometry
+and structure, including the first retained continuation frame. Use it when a
+source-prefix comparison is already qualified and the remaining question is
+where target-grid continuation changes develop.

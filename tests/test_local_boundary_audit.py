@@ -656,7 +656,10 @@ def test_temporal_increment_locates_new_stage_discontinuity_without_confusing_st
 
 
 @pytest.mark.parametrize("detail_region", ["off", "upper_left"])
-def test_node_saves_only_json_and_is_registered(bundle, monkeypatch, tmp_path, detail_region):
+@pytest.mark.parametrize("previews", [False, True])
+def test_node_saves_report_and_optional_previews_and_is_registered(
+    bundle, monkeypatch, tmp_path, detail_region, previews
+):
     import sys
 
     directory, _manifest, _video = bundle
@@ -670,10 +673,14 @@ def test_node_saves_only_json_and_is_registered(bundle, monkeypatch, tmp_path, d
         SimpleNamespace(MiniMaxH3Video=lambda: SimpleNamespace(process_out=lambda value: value)),
     )
     monkeypatch.setattr(audit, "geometry_comparison", lambda a, b, labels: {"frames": labels})
-    result = audit.H3FlowLocalBoundaryAudit().audit(FakeVAE(), str(directory), 175, detail_region=detail_region)
-    files = list(output.rglob("*.*"))
-    assert len(files) == 1 and files[0].suffix == ".json"
-    assert json.loads(files[0].read_text()) == json.loads(result["result"][0])
+    result = audit.H3FlowLocalBoundaryAudit().audit(
+        FakeVAE(), str(directory), 175, detail_region=detail_region, save_stage_previews=previews
+    )
+    reports = list(output.rglob("*.json"))
+    assert len(reports) == 1
+    assert json.loads(reports[0].read_text()) == json.loads(result["result"][0])
+    assert len(list(output.rglob("*.png"))) == (20 if previews else 0)
+    assert len(result["ui"].get("images", [])) == (20 if previews else 0)
     assert json.loads(result["result"][0])["detail_region"] == detail_region
     assert audit.NODE_CLASS_MAPPINGS["H3FlowLocalBoundaryAudit"] is audit.H3FlowLocalBoundaryAudit
 
