@@ -257,21 +257,21 @@ output; they do not classify camera motion or bokeh as defects.
 See [full-stage replay](docs/FULL_STAGE_CONTINUITY.md) and
 [boundary audit details](docs/BOUNDARY_AUDIT_REPLAY.md).
 
-| **MiniMax H3 Metrics JSON** | Writes structured H3/Spectrum/sampler/geometry metrics. |
+**MiniMax H3 Metrics JSON** writes structured model, sampler, geometry and forecasting metrics.
 
 ## Patch order and interoperability
 
-For the tested Continuum stack, keep model patches in this order when present:
+For the native-source Continuum stack, keep model patches in this order when present:
 
 ```text
 DiffAid
   -> Untwisting RoPE
   -> Spectrum
-  -> Progressive Target Input
+  -> Native Source Continuation
   -> Continuum
 ```
 
-DiffAid, Untwisting RoPE, Spectrum and VDN are optional integrations.
+DiffAid, Untwisting RoPE and Spectrum are optional. Native Source Continuation requires VDN-H3-Plus partitioned transport; Sol-H3 is optional. Generic Target Input retains its separate exact-prefix fallback.
 
 Important contracts:
 
