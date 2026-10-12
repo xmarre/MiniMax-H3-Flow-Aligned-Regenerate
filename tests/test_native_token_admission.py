@@ -136,9 +136,7 @@ def test_failed_python_return_does_not_claim_observation(monkeypatch):
     from h3_flow_regenerate import native_token_admission as token
 
     code = compile(
-        "def sol_attn_chunked():\n"
-        "    sol_attn_core()\n"
-        "    raise RuntimeError('synthetic core failure')\n",
+        "def sol_attn_chunked():\n    sol_attn_core()\n    raise RuntimeError('synthetic core failure')\n",
         "/opt/site-packages/comfy_kitchen/backends/cuda/__init__.py",
         "exec",
     )
