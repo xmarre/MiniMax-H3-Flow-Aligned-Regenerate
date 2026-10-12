@@ -108,9 +108,18 @@ differs, these observations do not distinguish operations inside that kernel.
 observations inside its interval. It is a diagnostic timing distribution,
 not a before/after performance result for a fix. `peak_allocated_bytes` counts
 PyTorch allocations including fixtures, clones and observer storage; it is
-not the production kernel's incremental memory overhead. CPU baselines are
-retained only for the current case; full model tensors or replay files are
-not written. The large case needs several GiB of free GPU and host memory.
+not the production kernel's incremental memory overhead. Byte-exact reference
+snapshots now stay on the tensors' device for the duration of each case.
+Repeated observations compare all logical bytes on that device; only baseline
+and differing tensors are transferred to host memory for full SHA256 receipts.
+An unchanged tensor reuses its baseline SHA256 only after exact byte equality,
+including signed-zero and NaN payload bits. Differences retain full hashes,
+RMS/max witnesses and concrete changed route lists. This reduces repeated
+host copies but raises diagnostic GPU allocation pressure and can itself
+perturb allocator-sensitive races; compare multiple runs before attribution.
+No full model tensors or replay files are written. Large cases require free
+GPU and host memory. The source-stage probe still synchronizes between phases,
+so utilization need not remain high throughout this diagnostic.
 
 ## Source-grounded hypothesis
 
