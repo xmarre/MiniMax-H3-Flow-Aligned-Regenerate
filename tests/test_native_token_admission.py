@@ -74,6 +74,7 @@ def test_profile_event_requires_installed_core_call(monkeypatch):
         f_locals={},
     )
     operation = SimpleNamespace(__name__="sol_attn_core")
+    monkeypatch.setattr(token.importlib.metadata, "version", lambda name: "0.2.37")
     monkeypatch.setattr(token, "capture_token_admission", lambda _locals: {"complete": True, "token_aug": 256})
     observer.record_event(record, frame, "c_return", SimpleNamespace(__name__="other"))
     assert record["calls"] == 0
