@@ -633,6 +633,7 @@ class NativeExecutionTrace:
 
     def summary(self):
         comparisons = {}
+        token_only = self.token_detail and not (self.module_detail or self.qkv_detail)
         baseline = self.arms.get("A", [])
         layers = baseline[0]["layers"] if baseline else 0
         expected = []
@@ -757,7 +758,8 @@ class NativeExecutionTrace:
                 "selected_boundaries_complete": bool(complete),
                 "selected_boundaries_exact": bool(complete and first is None),
                 "first_observed_difference": first,
-                "missing_selected_native_call": not baseline or not other,
+                "missing_selected_native_call": None if token_only else not baseline or not other,
+                "packed_hidden_unobserved_by_design": token_only,
             }
         return {
             "policy": POLICY,
