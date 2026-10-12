@@ -1,3 +1,36 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.12 — release candidate
+
+Native Source Continuation is the compact production interface for a uniform
+reduced-grid trajectory, paired native source context, learned 3D transfer and
+exact carried audio/video. The complete sequence must use the same patched MODEL.
+Native carry introduces no additional H3, provider or VAE evaluations. The
+image-grid handoff retains the low trajectory's measured residual rather than
+replacing it with unrelated high-grid noise.
+
+Existing node IDs, widget positions and explicit continuation settings remain
+loadable. The legacy diagnostic interface keeps its layout; retired live replay
+flags now clear stale observer options and emit a compatibility receipt. New
+workflows use the smaller interface and the new canvas/API examples.
+
+Removed the completed live low-sampler A/B/A machinery, internal kernel observers,
+startup diagnostic dumps, dedicated CUDA reproducer and its compile-only CI job.
+Saved audit readers, boundary capture and full-stage native-VAE replay remain.
+Historical evidence and the pre-cleanup checkpoint preserve the investigation.
+
+The user reports good boundaries across multiple prompts and reference images.
+Slight darkening remains unresolved. Zoom and bokeh are not classified as defects
+on the basis of fitted motion or sharpness metrics, and no Spectrum cause is
+established. This release candidate does not claim a tone correction or universal
+rendered acceptance. Detail transport stays off by default; saved explicit values
+are retained.
+
+The numerical overflow correction is owned by
+[comfy-kitchen #242](https://github.com/Comfy-Org/comfy-kitchen/pull/242).
+Packaging/interoperability is owned by
+[#246](https://github.com/Comfy-Org/comfy-kitchen/pull/246). A coordinated release
+must use the qualified Kitchen build; Flow's cleanup does not itself ship those
+upstream fixes. The existing stable companion versions below remain historical.
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.11
 
 Make one uniform source trajectory the default exact-prefix continuation, run

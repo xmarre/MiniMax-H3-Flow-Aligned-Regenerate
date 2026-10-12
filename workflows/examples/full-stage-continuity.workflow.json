@@ -1,0 +1,97 @@
+{
+  "id": "7baf35f7-bffb-465a-b164-fe0015c13ac5",
+  "revision": 0,
+  "last_node_id": 2,
+  "last_link_id": 1,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "VAELoader",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        360,
+        70
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "minimax_h3_video_vae_int8_convrot.safetensors"
+      ],
+      "title": "Select the captured native H3 video VAE"
+    },
+    {
+      "id": 2,
+      "type": "H3FlowLocalBoundaryAudit",
+      "pos": [
+        430,
+        0
+      ],
+      "size": [
+        540,
+        610
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video_vae",
+          "type": "VAE",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "numerical_report",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "H3FlowLocalBoundaryAudit"
+      },
+      "widgets_values": [
+        "",
+        175,
+        "full_stage_continuity",
+        "upper_left",
+        "01784_room",
+        true,
+        false,
+        "",
+        true
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "VAE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

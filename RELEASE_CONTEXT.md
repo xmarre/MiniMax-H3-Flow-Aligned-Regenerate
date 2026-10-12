@@ -1,3 +1,16 @@
+## v0.3.12 release candidate
+
+Flow PR [#99](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/99)
+prepares the native-source continuation interface and diagnostic cleanup.
+The qualified Kitchen overflow correction and relocatable packaging remain owned
+by [comfy-kitchen #242](https://github.com/Comfy-Org/comfy-kitchen/pull/242) and
+[#246](https://github.com/Comfy-Org/comfy-kitchen/pull/246). Complete their upstream
+qualification before declaring a coordinated release with those fixes.
+Slight continuation darkening remains a documented known issue.
+
+The stable coordinated set below predates this candidate and is preserved for
+users of v0.3.11; it does not claim that the pending Kitchen changes are released.
+
 ## Coordinated release set
 
 Update the coordinated components together. Every release links this same

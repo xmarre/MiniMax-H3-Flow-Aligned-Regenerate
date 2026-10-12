@@ -229,7 +229,7 @@ def test_partitioned_production_node_exposes_advanced_controls_without_changing_
     assert H3PartitionedExactPrefixDiagnosticHandoff.CATEGORY == "MiniMax H3/flow regenerate"
     assert (
         NODE_DISPLAY_NAME_MAPPINGS["H3PartitionedExactPrefixDiagnosticHandoff"]
-        == "MiniMax H3 Partitioned Exact-Prefix Handoff"
+        == "MiniMax H3 Partitioned Exact-Prefix Handoff [Legacy Controls]"
     )
     assert "[Diagnostic]" not in NODE_DISPLAY_NAME_MAPPINGS["H3PartitionedExactPrefixDiagnosticHandoff"]
 
@@ -299,6 +299,7 @@ def test_production_node_runtime_defaults_match_widgets_and_explicit_legacy_valu
         model=model, trajectory=object(), learned_upscaler=object(), **kwargs
     )
     options = result.model_options
+    assert "h3_flow_low_native_trace_step_v1" not in options
     transformer = options["transformer_options"]
     assert result is model and returned_metrics is metrics
     assert transformer["existing_owner"] is owner
