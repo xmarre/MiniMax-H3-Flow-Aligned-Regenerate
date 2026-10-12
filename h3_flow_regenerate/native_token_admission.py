@@ -1,8 +1,9 @@
 """Default-off observation of the actual Core H3 comfy-kitchen token admission.
 
 This uses a thread-local Python profiling callback to inspect the *installed*
-sol_attn_core call after it returns. Neither Core nor its CUDA extension is
-replaced. GPU-to-host copies synchronize after the already-enqueued core call.
+sol_attn_chunked wrapper when it returns successfully after its Core CUDA call.
+Neither Core nor its CUDA extension is replaced. GPU-to-host copies synchronize
+after the already-enqueued core call.
 The receipt excludes unwritten token-ID tails.
 """
 
@@ -126,17 +127,23 @@ class CoreTokenAdmissionObserver:
 
     @staticmethod
     def record_event(record, frame, event, arg):
-        if event not in ("c_return", "c_exception"):
-            return
-        if getattr(arg, "__name__", None) != "sol_attn_core":
+        if event != "return":
             return
         if frame.f_code.co_name != "sol_attn_chunked":
             return
         if not frame.f_code.co_filename.replace("\\", "/").endswith(SOURCE_SUFFIX):
             return
         record["calls"] += 1
-        if event == "c_exception":
-            record["unobserved"] = "core_cuda_exception"
+        if "sol_attn_core" not in frame.f_code.co_names:
+            record["unobserved"] = "wrapper_missing_core_callsite"
+            return
+        if (
+            not isinstance(arg, tuple)
+            or len(arg) != 3
+            or not torch.is_tensor(arg[0])
+            or list(arg[0].shape) != [1, frame.f_locals.get("t"), frame.f_locals.get("h"), 128]
+        ):
+            record["unobserved"] = "failed_or_unqualified_wrapper_return"
             return
         if record["calls"] > 1:
             record["unobserved"] = "multiple_core_calls"
@@ -187,7 +194,7 @@ class CoreTokenAdmissionObserver:
             "selected_native_core_calls": self.records,
             "comparisons": pairs,
             "limitations": (
-                "Reads final installed-core token workspace after C return. "
+                "Reads final installed Core workspace at successful chunked Python wrapper return. "
                 "Only comfy-kitchen 0.2.37 layout is supported. "
                 "Does not prove equality of producer inputs or identify an internal CUDA launch. "
                 "GPU synchronization and profiling can affect scheduling. "
