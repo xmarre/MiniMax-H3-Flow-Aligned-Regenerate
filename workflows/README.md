@@ -48,7 +48,12 @@ Use the suffixes as the contract:
 - `*.api.json` = executable API prompt graph;
 - `*.overlay.json` = topology/specification document only.
 
-`progressive-handoff.overlay.json` describes the **Partitioned Exact-Prefix** Continuum topology and complete production defaults. The generic **Target Input** path is retained explicitly as a control, including its conservative exact-prefix fallback, while historical progressive validation records remain separate. The overlay also records the one-release deprecation contract for `H3ProgressiveMixedGridHandoff`: the old node ID remains loadable with its original semantics, is not remapped to Target Input, and is not a production release gate.
+`progressive-handoff.overlay.json` preserves the older Partitioned Exact-Prefix
+control layout and its compatibility defaults. Use the native-source canvas/API
+examples for the current recommended production node and defaults. The generic
+Target Input overlay remains a control, including its conservative exact-prefix
+fallback. Historical progressive validation and the deprecated Mixed-Grid node
+retain their original semantics and are separate from the production examples.
 
 ## Full-context boundary stage replay
 

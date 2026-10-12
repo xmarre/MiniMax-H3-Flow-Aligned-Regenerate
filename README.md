@@ -134,9 +134,9 @@ This solves a separate decoder-window boundary problem. It is independent of Tar
 
 See [docs/CONTINUUM_DECODE_CONTEXT.md](docs/CONTINUUM_DECODE_CONTEXT.md).
 
-## Standard Target Input path
+## Generic Target Input control
 
-Use **MiniMax H3 Progressive Handoff (Target Input)** when the surrounding workflow is already defined at the final target geometry.
+**MiniMax H3 Progressive Handoff (Target Input)** remains a general control for workflows defined at the final target geometry. Native Source Continuation is the recommended progressive interface with VDN-H3-Plus and learned transfer.
 
 The canonical defaults are:
 
