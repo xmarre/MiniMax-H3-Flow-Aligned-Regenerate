@@ -8,6 +8,7 @@ from .boundary_witness import WITNESS_DIRECTORY_OPTION
 from .comfy_compat import _put_wrapper_first, patch_flow_model
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveTargetInputConfig
+from .legacy_diagnostics import retire_low_replay_controls
 from .metrics import H3FlowMetrics
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
 from .partitioned_attention import sol_attention_selected
@@ -56,15 +57,16 @@ from .partitioned_transformer import (
     partitioned_diffusion_wrapper,
 )
 from .runtime import OUTER_WRAPPER_KEY
+from .source_prefix_projection import SOURCE_PREFIX_PROJECTION_OPTIONS, configure_source_prefix_projection
 
 
 class H3PartitionedExactPrefixHandoff:
     """Run low/probe/high continuation without resizing exact protected context.
 
-    This remains an experimental node until the real SM120 and decoded-media
-    gates are closed. The released Progressive Target Input node is unchanged.
+    Compatibility interface for historical mixed-grid continuation workflows.
     """
 
+    DEPRECATED = True
     FRAME_GAUGE_REPAIR_DEFAULT = False
     PRODUCTION_DEFAULT_CHANGED = False
 
@@ -457,6 +459,10 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "through the learned upscaler, then restores the exact target-grid prefix before high "
                     "refinement. Use normal attention/VDN diagnostics and the default target-band selectors "
                     "with this mode. "
+                    "progressive_uniform_source_exact_context is an unqualified candidate that additionally "
+                    "conditions low/probe on the unresampled target-grid prefix as a native video reference; "
+                    "Core places it before the target timeline and shifts target audio/video together; "
+                    "generated video still uses one native reduced-grid trajectory. "
                     "same_grid_target_control runs continuation low/probe directly on the target grid, keeps "
                     "the same handoff split and downstream high stage, and uses an identity "
                     "clean-video transfer. All-generated first chunks retain progressive generation. "
@@ -562,13 +568,59 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                 ),
             },
         )
+        # Append-only after target_band_context so serialized widget positions remain stable.
+        spec["required"]["uniform_source_detail_transport"] = (
+            "BOOLEAN",
+            {
+                "default": False,
+                "tooltip": (
+                    "Experimental, off by default; used only by the progressive_uniform_source spatial-stage "
+                    "modes. Adds the last prefix frame's exact-minus-learned residual to the suffix before "
+                    "high refinement, weighted by learned change and prefix residual persistence. Prefix "
+                    "calibration does not establish suffix motion safety: detail lost by projection can move "
+                    "without the gate detecting it, causing stale detail or an overlay. Rendered quality is "
+                    "unvalidated. Keep off when testing exact visual context alone."
+                ),
+            },
+        )
+        # Append after all historical widgets; old workflows keep latent bicubic.
+        spec["required"]["source_prefix_projection"] = (
+            list(SOURCE_PREFIX_PROJECTION_OPTIONS),
+            {
+                "default": "latent_bicubic",
+                "tooltip": (
+                    "Source-prefix construction for progressive_uniform_source modes. vae_rgb_roundtrip "
+                    "decodes the carried target prefix, resizes RGB and encodes it once before low sampling. "
+                    "Connect the generation's native video_vae. Experimental continuation input; final target "
+                    "prefix remains exact. Adds one VAE decode and one encode per continuation chunk. "
+                    "native_source_carry instead uses the preceding chunk's source clean prediction, paired "
+                    "by the exact returned target-prefix hash; run the full sequence with the same patched MODEL. "
+                    "No VAE is needed for carry; missing or changed context stops before sampling."
+                ),
+            },
+        )
+        retired_tooltip = (
+            "Retired compatibility field. Saved values remain loadable; live replay and kernel observation "
+            "no longer execute. Saved diagnostic bundles remain readable."
+        )
+        spec["required"]["low_sampler_aba"] = ("BOOLEAN", {"default": False, "tooltip": retired_tooltip})
+        spec["optional"]["video_vae"] = ("VAE",)
+        for name in ("low_native_trace_step", "low_native_trace_pair_block"):
+            spec["required"][name] = ("INT", {"default": -1, "min": -1, "max": 511, "tooltip": retired_tooltip})
+        for name in (
+            "low_native_trace_module_detail",
+            "low_native_trace_projection_detail",
+            "low_native_trace_qkv_detail",
+            "low_native_trace_token_admission",
+        ):
+            spec["required"][name] = ("BOOLEAN", {"default": False, "tooltip": retired_tooltip})
         return spec
 
     CATEGORY = "MiniMax H3/flow regenerate"
     DESCRIPTION = (
         "Continuum handoff with exact caller-visible prefix restoration for the coordinated "
-        "VDN-H3-Plus stack using the selected attention backend. Continuation defaults to target-grid "
-        "low/probe and identity "
+        "VDN-H3-Plus stack using the selected attention backend. Continuation defaults to uniform reduced-grid "
+        "low/probe and learned "
         "handoff; all-generated first chunks retain learned progressive transfer. Preserves "
         "coherent exact audio input/timestep/velocity masks, and exact "
         "caller-visible prefix restoration. Advanced selectors remain available for controlled comparisons."
@@ -612,8 +664,18 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
         target_band_tokens=PARTITIONED_TARGET_BAND_TOKENS_DEFAULT,
         target_band_handoff_state=PARTITIONED_TARGET_BAND_HANDOFF_STATE_RENOISE,
         target_band_context=PARTITIONED_TARGET_BAND_CONTEXT_MIXED,
+        uniform_source_detail_transport=False,
         metrics=None,
         temporal_weight=0.20,
+        source_prefix_projection="latent_bicubic",
+        video_vae=None,
+        low_sampler_aba=False,
+        low_native_trace_step=-1,
+        low_native_trace_pair_block=-1,
+        low_native_trace_module_detail=False,
+        low_native_trace_projection_detail=False,
+        low_native_trace_qkv_detail=False,
+        low_native_trace_token_admission=False,
     ):
         patched, metrics = super().patch(
             model=model,
@@ -635,6 +697,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             frame_gauge_repair=frame_gauge_repair,
             frame_gauge_residual_mode=frame_gauge_residual_mode,
         )
+        configure_source_prefix_projection(patched, source_prefix_projection, video_vae, spatial_stage_control)
         witness_directory = ""
         if capture_boundary_witness:
             try:
@@ -658,7 +721,7 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             restart_required=False,
             output_mutated=False,
         )
-        return apply_partitioned_diagnostic_controls(
+        patched, metrics = apply_partitioned_diagnostic_controls(
             patched,
             metrics,
             vdn_linear_diagnostic=vdn_linear_diagnostic,
@@ -680,16 +743,132 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
             target_band_tokens=target_band_tokens,
             target_band_handoff_state=target_band_handoff_state,
             target_band_context=target_band_context,
+            uniform_source_detail_transport=uniform_source_detail_transport,
+        )
+        retire_low_replay_controls(
+            patched,
+            metrics,
+            low_sampler_aba=low_sampler_aba,
+            low_native_trace_step=low_native_trace_step,
+            low_native_trace_pair_block=low_native_trace_pair_block,
+            low_native_trace_module_detail=low_native_trace_module_detail,
+            low_native_trace_projection_detail=low_native_trace_projection_detail,
+            low_native_trace_qkv_detail=low_native_trace_qkv_detail,
+            low_native_trace_token_admission=low_native_trace_token_admission,
+        )
+        return patched, metrics
+
+
+class H3NativeSourceContinuationHandoff(H3PartitionedExactPrefixDiagnosticHandoff):
+    """Production uniform-source continuation with paired native source context."""
+
+    DEPRECATED = False
+    CATEGORY = "MiniMax H3/flow regenerate"
+    DESCRIPTION = (
+        "Recommended progressive H3 generation for single chunks and Continuum sequences. "
+        "Uses learned 3D transfer; continuation preserves exact protected video/audio. "
+        "Requires VDN-H3-Plus and the learned upscaler. Native source carry pairs the preceding source "
+        "prediction with its returned target suffix. Run the complete sequence with the "
+        "same patched MODEL."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        spec = copy.deepcopy(H3PartitionedExactPrefixHandoff.INPUT_TYPES())
+        legacy = H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()
+        for name in ("audio_guided_overlap_mode", "audio_guided_overlap_ticks", "uniform_source_detail_transport"):
+            spec["required"][name] = copy.deepcopy(legacy["required"][name])
+        spec["required"]["uniform_source_detail_transport"][1]["default"] = True
+        spec["required"]["audio_guided_overlap_mode"] = (
+            ["sampler_mask_exact_timestep", "exact_mask", "sampler_mask"],
+            {
+                "default": "sampler_mask_exact_timestep",
+                "tooltip": "Exact modes protect carried audio. Sampler mask releases the selected overlap width.",
+            },
+        )
+        spec["required"]["uniform_source_detail_transport"][1]["tooltip"] = (
+            "Transfer the last-prefix exact-minus-learned detail residual before high refinement. "
+            "Adds no model or VAE call. May affect suffix detail; compare rendered output."
+        )
+        spec["required"]["source_prefix_projection"] = (
+            ["native_source_carry", "latent_bicubic"],
+            {
+                "default": "native_source_carry",
+                "tooltip": (
+                    "Native carry reuses the preceding source prediction, paired by the returned target suffix. "
+                    "The complete sequence must use this same MODEL. Latent bicubic reconstructs the "
+                    "source prefix from the target prefix. Neither mode modifies protected target bytes."
+                ),
+            },
+        )
+        spec["optional"]["capture_boundary_witness"] = copy.deepcopy(legacy["required"]["capture_boundary_witness"])
+        return spec
+
+    def patch(
+        self,
+        model,
+        trajectory,
+        source_mode,
+        source_scale,
+        source_width,
+        source_height,
+        handoff_coordinate,
+        handoff_selection,
+        guidance_mode,
+        direction_weight,
+        acceleration_weight,
+        consistency_weight,
+        low_frequency_cutoff,
+        learned_upscaler,
+        audio_guided_overlap_mode,
+        audio_guided_overlap_ticks,
+        uniform_source_detail_transport,
+        source_prefix_projection="native_source_carry",
+        metrics=None,
+        temporal_weight=0.20,
+        capture_boundary_witness=False,
+    ):
+        if audio_guided_overlap_mode not in ("sampler_mask_exact_timestep", "exact_mask", "sampler_mask"):
+            raise ValueError("native source continuation requires a coherent audio mask mode")
+        if source_prefix_projection not in ("native_source_carry", "latent_bicubic"):
+            raise ValueError("native source continuation supports native_source_carry or latent_bicubic")
+        return super().patch(
+            model=model,
+            trajectory=trajectory,
+            source_mode=source_mode,
+            source_scale=source_scale,
+            source_width=source_width,
+            source_height=source_height,
+            handoff_coordinate=handoff_coordinate,
+            handoff_selection=handoff_selection,
+            guidance_mode=guidance_mode,
+            direction_weight=direction_weight,
+            acceleration_weight=acceleration_weight,
+            consistency_weight=consistency_weight,
+            low_frequency_cutoff=low_frequency_cutoff,
+            temporal_weight=temporal_weight,
+            learned_upscaler=learned_upscaler,
+            metrics=metrics,
+            vdn_linear_diagnostic=PARTITIONED_VDN_LINEAR_DIAGNOSTIC_NORMAL,
+            audio_guided_overlap_mode=audio_guided_overlap_mode,
+            audio_guided_overlap_ticks=audio_guided_overlap_ticks,
+            prefix_transformer_context=PARTITIONED_PREFIX_TRANSFORMER_CONTEXT_EXACT,
+            spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE,
+            source_prefix_projection=source_prefix_projection,
+            uniform_source_detail_transport=uniform_source_detail_transport,
+            capture_boundary_witness=capture_boundary_witness,
         )
 
 
 NODE_CLASS_MAPPINGS = {
+    "H3NativeSourceContinuationHandoff": H3NativeSourceContinuationHandoff,
     "H3PartitionedExactPrefixHandoff": H3PartitionedExactPrefixHandoff,
     "H3PartitionedExactPrefixDiagnosticHandoff": H3PartitionedExactPrefixDiagnosticHandoff,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "H3NativeSourceContinuationHandoff": "MiniMax H3 Native Source Continuation",
     "H3PartitionedExactPrefixHandoff": "MiniMax H3 Partitioned Exact-Prefix Handoff [Compatibility]",
-    "H3PartitionedExactPrefixDiagnosticHandoff": "MiniMax H3 Partitioned Exact-Prefix Handoff",
+    "H3PartitionedExactPrefixDiagnosticHandoff": "MiniMax H3 Partitioned Exact-Prefix Handoff [Legacy Controls]",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

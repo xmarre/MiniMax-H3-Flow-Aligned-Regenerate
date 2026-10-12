@@ -179,3 +179,40 @@ def test_native_window_oracle_matches_continuous_decode_and_reproduces_old_seam(
         cursor += chunk["net_frames"]
         bad_frames[cursor - 5 : cursor] = True
     assert torch.equal(old[:, :, ~bad_frames], expected[:, :, ~bad_frames])
+
+
+def test_decode_input_fingerprint_is_dtype_independent_and_reported():
+    from h3_flow_regenerate.decode_context import video_latent_fingerprint
+
+    _timeline, latents, plan = sequence()
+    video = latents[-1]["samples"]
+    as_float32 = video_latent_fingerprint(video)
+    as_float64 = video_latent_fingerprint(video.to(torch.float64))
+    assert as_float32["sha256_float32"] == as_float64["sha256_float32"]
+    assert as_float64["dtype"] == "float64"
+    changed = video.clone()
+    changed[0, 0, -1, 0, 0] += 1.0
+    assert video_latent_fingerprint(changed)["sha256_float32"] != as_float32["sha256_float32"]
+
+    _output, report = prepare_decode_context(latents, plan)
+    for index, latent in enumerate(latents):
+        expected = video_latent_fingerprint(latent["samples"])["sha256_float32"]
+        assert f"input group {index + 1}: sha256_float32={expected}" in report
+
+
+def test_image_geometry_probe_measures_without_modifying_images():
+    import json
+
+    from h3_flow_regenerate.decode_context import H3ContinuumImageGeometryProbe
+
+    generator = torch.Generator().manual_seed(7)
+    base = torch.rand(1, 128, 128, 3, generator=generator)
+    images = base.repeat(200, 1, 1, 1)
+    before = images.clone()
+    out, report = H3ContinuumImageGeometryProbe().probe(images, 175, "01784_room", "")
+    assert out is images and torch.equal(images, before)
+    parsed = json.loads(report)
+    assert parsed["measured_frames"] == [159, 190]
+    assert parsed["images_modified"] is False
+    shift = parsed["trajectory"]["per_frame_regions"]["bookshelf"]["190"]["relative_to_prefix_displacement"]
+    assert abs(shift["dx_px"]) < 1e-6 and abs(shift["dy_px"]) < 1e-6

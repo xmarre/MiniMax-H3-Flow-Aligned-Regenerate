@@ -16,6 +16,7 @@ from .geometry import (
     validate_av,
 )
 from .guidance import conditional_renoise_alignment, conditional_renoise_target
+from .image_residual import refine_image_residual, transport_image_flow_residual
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
 
 H3_LATENT_UPSCALER_API_VERSION = 1
@@ -276,10 +277,21 @@ def deterministic_video_noise(
 H3_HANDOFF_NOISE_INDEPENDENT = "independent"
 H3_HANDOFF_NOISE_SOURCE_RESIDUAL = "source_residual_patch_refinement_v1"
 H3_HANDOFF_NOISE_DENSE_DRIFT = "source_residual_dense_drift_v2"
+H3_HANDOFF_NOISE_IMAGE_RESIDUAL = "source_residual_image_refinement_v1"
+H3_HANDOFF_NOISE_IMAGE_DRIFT = "source_residual_image_drift_v1"
+H3_HANDOFF_RESIDUAL_NOISE_MODES = {
+    H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
+    H3_HANDOFF_NOISE_DENSE_DRIFT,
+    H3_HANDOFF_NOISE_IMAGE_RESIDUAL,
+    H3_HANDOFF_NOISE_IMAGE_DRIFT,
+}
+H3_HANDOFF_DRIFT_NOISE_MODES = {H3_HANDOFF_NOISE_DENSE_DRIFT, H3_HANDOFF_NOISE_IMAGE_DRIFT}
 H3_HANDOFF_NOISE_MODES = {
     H3_HANDOFF_NOISE_INDEPENDENT,
     H3_HANDOFF_NOISE_SOURCE_RESIDUAL,
     H3_HANDOFF_NOISE_DENSE_DRIFT,
+    H3_HANDOFF_NOISE_IMAGE_RESIDUAL,
+    H3_HANDOFF_NOISE_IMAGE_DRIFT,
 }
 
 
@@ -551,7 +563,7 @@ def build_handoff_state(
     if noise_mode not in H3_HANDOFF_NOISE_MODES:
         raise ValueError(f"unsupported progressive handoff noise mode {noise_mode!r}")
     noise_report: dict[str, Any]
-    if noise_mode in {H3_HANDOFF_NOISE_SOURCE_RESIDUAL, H3_HANDOFF_NOISE_DENSE_DRIFT}:
+    if noise_mode in H3_HANDOFF_RESIDUAL_NOISE_MODES:
         # Preserve the effective flow residual in carried-state units. This is
         # deliberately not divided by model_sampling.noise_scale: the handoff
         # reconstruction below is x_t=(1-sigma)*x0+sigma*residual and therefore
@@ -559,7 +571,40 @@ def build_handoff_state(
         source_residual = (source_video.to(torch.float32) - (1.0 - float(sigma)) * x0_video.to(torch.float32)) / float(
             sigma
         )
-        if noise_mode == H3_HANDOFF_NOISE_DENSE_DRIFT:
+        if noise_mode in {H3_HANDOFF_NOISE_IMAGE_RESIDUAL, H3_HANDOFF_NOISE_IMAGE_DRIFT}:
+            if not math.isfinite(float(model_noise_scale)) or float(model_noise_scale) <= 0.0:
+                raise ValueError("image-grid residual handoff requires a finite positive model noise_scale")
+            innovation = deterministic_video_noise(
+                (*source_video.shape[:-2], target_h, target_w),
+                seed=seed,
+                device=source_video.device,
+                dtype=torch.float32,
+            )
+            if noise_mode == H3_HANDOFF_NOISE_IMAGE_DRIFT:
+                noise, noise_report = transport_image_flow_residual(
+                    source_residual,
+                    initial_source_noise,
+                    innovation,
+                    noise_scale=model_noise_scale,
+                )
+            else:
+                # The carried residual already includes model_sampling.noise_scale.
+                # The independent fine modes must use the same scale; otherwise
+                # stochastic handoff has different coarse/fine noise variance.
+                noise, noise_report = refine_image_residual(source_residual, innovation * float(model_noise_scale))
+                noise_report.pop("gaussian_marginal_if_source_standard")
+                noise_report.update(
+                    gaussian_marginal_if_source_at_model_noise_scale=True,
+                    innovation_noise_scale=float(model_noise_scale),
+                    target_gaussian_variance_if_source_at_model_scale=float(model_noise_scale) ** 2,
+                )
+            noise_report.update(
+                policy=noise_mode,
+                innovation_seed=int(seed),
+                source_hw=tuple(source_video.shape[-2:]),
+                target_hw=(target_h, target_w),
+            )
+        elif noise_mode == H3_HANDOFF_NOISE_DENSE_DRIFT:
             if initial_source_noise is None:
                 raise ValueError("dense drift handoff requires the original source-grid sampler noise")
             noise, noise_report = refine_h3_flow_residual(

@@ -1,3 +1,57 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.12
+
+## Recommended progressive H3 node
+
+**MiniMax H3 Native Source Continuation** is the default recommended interface for
+single-chunk generation and Continuum Native Masked sequences. It requires
+VDN-H3-Plus and the learned 3D upscaler. An all-generated single chunk uses
+ordinary low/probe/high progressive learned transfer and needs no prior chunk.
+For a sequence, reuse the same patched MODEL from the initial chunk onward;
+native source carry requires exact pairing with its preceding returned target
+suffix before continuation sampling.
+
+New-node defaults: source mode `scale`, scale `0.70`, explicit pixel geometry
+`864 × 640`, fixed handoff `0.35`, `direction+temporal` guidance, direction `0.25`,
+temporal `0.20`, acceleration/consistency/cutoff `0.25`, exact audio mask
+`sampler_mask_exact_timestep`, stored audio overlap `16`,
+`uniform_source_detail_transport=true`, `source_prefix_projection=native_source_carry`
+and `capture_boundary_witness=false`. Acceleration and consistency are inactive
+in the default guidance mode. Exact audio mode applies zero effective overlap.
+Detail transport applies only when calibration and holdout checks pass; it can
+skip a correction and has no prefix to correct in an all-generated single chunk.
+It adds no H3, provider or VAE evaluation; calibration still uses compute and memory.
+
+The uniform-source handoff retains the measured low trajectory residual on the
+image grid. Native carry pairs the preceding source clean prediction with the
+returned target suffix and retains no CUDA snapshot. Returned protected audio
+and video ownership remain exact. See the [setup guide](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/blob/v0.3.12/README.md#recommended-generation-defaults).
+
+## Compatibility and cleanup
+
+Existing node IDs, widget positions and explicit continuation settings remain
+loadable. Legacy defaults remain unchanged; saved detail transport `false` values
+are retained. Retired live replay flags clear stale observer options and emit a
+compatibility receipt without adding sampler lifetimes or kernel observers.
+Removed the completed live A/B/A machinery, internal kernel probes, startup
+source dumps, Flow-side CUDA reproducer and its compile-only CI lane. Saved audit
+readers, optional boundary capture and full-stage native-VAE replay remain.
+
+The native-source canvas/API examples now identify the correct generation path,
+use a distinct output prefix and match the production defaults. Background feature
+tracking rejects a missing or invalid assembled join frame before loading
+operands or decoding, preserving zero-based relative labels when tracking is off.
+Source-contract CI uses Spectrum v0.2.29 for current history interoperability.
+
+## Known limitations
+
+Slight continuation darkening remains unresolved. Native carry and detail
+transport do not guarantee a tone correction, rendered seam quality or timing for
+every prompt, reference, seed or backend. Camera and focus behavior depend on
+conditioning. Upstream Kitchen and Core patches are documented in the coordinated
+release context; this Flow release does not bundle their fixes.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.11
 
 Make one uniform source trajectory the default exact-prefix continuation, run
