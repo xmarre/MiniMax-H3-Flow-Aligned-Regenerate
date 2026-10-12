@@ -398,8 +398,8 @@ class LowReplayTrace:
             validate_pair_block,
             validate_projection_detail,
             validate_qkv_detail,
-            validate_token_detail,
             validate_step,
+            validate_token_detail,
         )
 
         validate_step(native_step)
@@ -933,7 +933,14 @@ def traced_partitioned(function):
     def wrapped(executor, guider, *args, **kwargs):
         if not guider.model_options.get("h3_flow_low_sampler_aba_v1", False):
             return function(executor, guider, *args, **kwargs)
-        from .native_execution_trace import MODULE_OPTION, OPTION, PAIR_OPTION, PROJECTION_OPTION, QKV_OPTION, TOKEN_OPTION
+        from .native_execution_trace import (
+            MODULE_OPTION,
+            OPTION,
+            PAIR_OPTION,
+            PROJECTION_OPTION,
+            QKV_OPTION,
+            TOKEN_OPTION,
+        )
 
         with low_trace_scope(
             guider.model_options.get(OPTION, -1),
