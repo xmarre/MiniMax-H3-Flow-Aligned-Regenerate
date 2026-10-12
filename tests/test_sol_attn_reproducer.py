@@ -141,6 +141,59 @@ def test_verified_source_rejects_changed_bytes(tmp_path, monkeypatch):
         probe.verified_source(tmp_path)
 
 
+
+def test_comparisons_reuses_sha_after_exact_byte_check(monkeypatch):
+    original_digest = probe.digest
+    calls = []
+
+    def counted(tensor):
+        calls.append(1)
+        return original_digest(tensor)
+
+    monkeypatch.setattr(probe, "digest", counted)
+    comparison = probe.Comparisons()
+    first = torch.tensor([0.0, 1.0], dtype=torch.bfloat16)
+    initial = comparison.observe("out", {"out": first}, 0)["out"]
+    assert len(calls) == 1
+    assert initial["bitwise_equal"] is True
+    # The stored reference must not alias the caller's mutable input.
+    first[0] = -0.0
+    repeated = comparison.observe("out", {"out": first.clone()}, 1)["out"]
+    assert repeated["bitwise_equal"] is False
+    assert repeated["sha256"] != initial["sha256"]
+    assert repeated["rms"] == 0.0
+    assert len(calls) == 2
+    unchanged = comparison.observe("out", {"out": torch.tensor([0.0, 1.0], dtype=torch.bfloat16)}, 2)["out"]
+    assert unchanged["bitwise_equal"] is True
+    assert unchanged["sha256"] == initial["sha256"]
+    assert len(calls) == 2
+
+
+def test_comparisons_preserves_signed_zero_and_nan_payload_bytes():
+    comparison = probe.Comparisons()
+    original = torch.tensor([0, 0x7FC1], dtype=torch.int16).view(torch.bfloat16)
+    same_values_new_nan_payload = torch.tensor([0, 0x7FC2], dtype=torch.int16).view(torch.bfloat16)
+    baseline = comparison.observe("raw", {"out": original}, 0)["out"]
+    # Both NaNs compare unequal numerically; the equal bit payload is still
+    # byte-identical on replay and must not cause a false divergence.
+    assert comparison.observe("raw", {"out": original.clone()}, 1)["out"]["bitwise_equal"] is True
+    different = comparison.observe("raw", {"out": same_values_new_nan_payload}, 2)["out"]
+    assert different["bitwise_equal"] is False
+    assert different["sha256"] != baseline["sha256"]
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU byte comparison requires CUDA")
+def test_comparisons_gpu_exact_and_reference_unchanged():
+    c = probe.Comparisons()
+    a = torch.arange(512, dtype=torch.int32, device="cuda")
+    sha = c.observe("gpu", {"idx": a}, 0)["idx"]["sha256"]
+    a[0] = -1
+    different = c.observe("gpu", {"idx": a}, 1)["idx"]
+    assert different["bitwise_equal"] is False
+    assert different["max_abs"] == 1.0
+    assert c.observe("gpu", {"idx": torch.arange(512, dtype=torch.int32, device="cuda")}, 2)["idx"]["sha256"] == sha
+
+
 def test_extension_observer_freezes_effective_stats_without_replacing_backend(monkeypatch):
     import types
 
