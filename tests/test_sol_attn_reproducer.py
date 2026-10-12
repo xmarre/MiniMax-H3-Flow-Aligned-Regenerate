@@ -191,7 +191,8 @@ def test_comparisons_gpu_exact_and_reference_unchanged():
     different = c.observe("gpu", {"idx": a}, 1)["idx"]
     assert different["bitwise_equal"] is False
     assert different["max_abs"] == 1.0
-    assert c.observe("gpu", {"idx": torch.arange(512, dtype=torch.int32, device="cuda")}, 2)["idx"]["sha256"] == sha
+    original = torch.arange(512, dtype=torch.int32, device="cuda")
+    assert c.observe("gpu", {"idx": original}, 2)["idx"]["sha256"] == sha
 
 
 def test_extension_observer_freezes_effective_stats_without_replacing_backend(monkeypatch):
