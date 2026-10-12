@@ -511,7 +511,7 @@ class NativeExecutionTrace:
                             lambda mod, args, result: post_callback(mod, args, result, name="out_proj_post_adapter")
                         )
                     )
-            else:
+            elif not self.token_detail:
                 modules = (
                     ("attention_out_proj", getattr(getattr(block, "attn", None), "out_proj", None)),
                     ("post_attention_norm2", getattr(block, "norm2", None)),
