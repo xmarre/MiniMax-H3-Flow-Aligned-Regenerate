@@ -141,7 +141,6 @@ def test_verified_source_rejects_changed_bytes(tmp_path, monkeypatch):
         probe.verified_source(tmp_path)
 
 
-
 def test_comparisons_reuses_sha_after_exact_byte_check(monkeypatch):
     original_digest = probe.digest
     calls = []
