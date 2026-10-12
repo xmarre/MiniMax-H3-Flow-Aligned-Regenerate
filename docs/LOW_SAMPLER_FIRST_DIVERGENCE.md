@@ -616,3 +616,57 @@ be an **isolated primitive determinism reproducer** using
 the original `comfy-kitchen==0.2.37` source and controlled
 full kernel inputs, not a speculative production backend gate,
 cache reset, geometry correction or alternate sampler.
+
+
+### Installed Core token-admission occupancy witness
+
+The optional `low_native_trace_token_admission=false` (default) captures one
+actual, installed `comfy-kitchen` `sol_attn_core` call for the selected
+`low_native_trace_step` and `low_native_trace_pair_block` during frozen
+`low_sampler_aba` A/B/A′ execution. It does **not** substitute the sampled
+Sol-H3 CuTe implementation: Core H3's source-backed chunked producer is the
+required actual runtime path. `low_native_trace_token_admission=true` requires
+a selected nonnegative step and pair block and `low_sampler_aba=true`.
+Unlike full QKV tracing, it does not require any module/projection detail.
+
+The observation uses a temporary **thread-local Python profile callback**
+to inspect the actual `sol_attn_chunked` Python frame immediately after its
+`_C.sol_attn_core` invocation returns. It never patches
+`comfy_kitchen.sol_attn_chunked`, replaces the extension, changes model
+options, alters token budgets, or initiates additional forwards. It restores
+the prior profiler in `finally`; an already-active profiler is reported
+as unobserved rather than replaced. Profiling and post-CUDA synchronization
+can still alter timing; a stable observed replay does not rule out a race.
+
+The receipt in `native_execution_trace.internal_token_admission` contains
+the actual Core `T/H/token_aug`, group count, maximum reservations,
+groups **above** and **exactly at** capacity, histogram-window peak,
+top histogram-bin peak, and full SHA256 of reservation counts,
+histogram and canonical retained token IDs. Unwritten list slots are never
+loaded into the digest. Each full receipt is bounded to 32 MiB of Core
+workspace data, never exports complete QKV, weights or workspace, and
+requires exactly one verified Core call per selected arm. Missing or
+extra calls, unsupported geometry, absent Core source, exceptions and
+pre-existing Python profilers prevent a completeness claim.
+
+A diagnostic dedicated to admission occupancy should use
+`low_native_trace_step=5`, `low_native_trace_pair_block=45`,
+`low_native_trace_token_admission=true`, and keep
+`low_native_trace_module_detail=false`,
+`low_native_trace_projection_detail=false`,
+`low_native_trace_qkv_detail=false`. Preserve the original workflow's
+model, prompt, LoRA, sampler, source carry, seed, attention settings and
+other controls. Only the selected block's token counts/IDs are recorded;
+this lightweight mode does not claim complete model hidden-state A/A′
+equality. Use existing full QKV witnesses when evaluating upstream operand
+equality.
+
+The A/A′ comparison in the report distinguishes matching reservation counts,
+histograms, and retained token IDs. If **all** real groups remain within the
+configured budget, the forced-overflow synthetic race is not the
+explanation for this call's native output difference; investigate another
+internal stage. If real groups overflow and retained-ID hashes differ while
+counts/histograms match, the evidence supports nondeterministic admission
+as a candidate within the observed primitive interval. Source attribution
+still requires matching effective operands and upstream kernel evidence
+before making a numerical correction or claiming a seam fix.
