@@ -155,6 +155,28 @@ def node_call(**changes):
     return node.patch(**(values | changes))
 
 
+
+def test_actual_core_token_admission_is_default_off_and_explicitly_scoped():
+    from h3_flow_regenerate.partitioned_node import H3PartitionedExactPrefixDiagnosticHandoff
+
+    spec = H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["required"]
+    assert spec["low_native_trace_token_admission"][1]["default"] is False
+    with pytest.raises(ValueError, match="low_native_trace_token_admission"):
+        node_call(low_native_trace_token_admission=True)
+    with pytest.raises(ValueError, match="low_native_trace_token_admission"):
+        LowReplayTrace(native_token_detail=True)
+    observer = NativeExecutionTrace(5, _full_sha, pair_block=45, token_detail=True)
+    trace = SimpleNamespace(arm="A", stage="low", evaluation=5, native_call=1)
+    obj = block()
+    assert observer.summary()["internal_token_admission"]["policy"] == "h3_core_sparse_token_admission_v1"
+    with observer.internal_block_hooks(trace, 45, 50, obj, {}, None):
+        # Token-only mode never hashes native BF16 hidden state.
+        observer.observe(trace, 45, 50, "input", torch.ones(2, 4), obj, {}, None)
+    assert observer.arms == {}
+    receipt = observer.summary()["internal_token_admission"]["selected_native_core_calls"]["A"]
+    assert not receipt["complete"] and receipt["calls"] == 0
+
+
 def test_real_core_flow_block_chain_preserves_av_outputs_and_captures_inside_lease(monkeypatch):
     cli = pytest.importorskip("comfy.cli_args")
     cli.args.cpu = True
