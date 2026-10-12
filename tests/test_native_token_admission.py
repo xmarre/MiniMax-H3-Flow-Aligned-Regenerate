@@ -61,7 +61,7 @@ def test_bad_workspace_bounds_are_not_silently_read():
         capture_token_admission(frame, require_cuda=False)
 
 
-def test_profile_event_requires_installed_core_call(monkeypatch):
+def test_profile_event_requires_verified_successful_wrapper_return(monkeypatch):
     from h3_flow_regenerate import native_token_admission as token
 
     observer = CoreTokenAdmissionObserver()
@@ -70,18 +70,84 @@ def test_profile_event_requires_installed_core_call(monkeypatch):
         f_code=SimpleNamespace(
             co_name="sol_attn_chunked",
             co_filename="/opt/site-packages/comfy_kitchen/backends/cuda/__init__.py",
+            co_names=("sol_attn_core",),
         ),
-        f_locals={},
+        f_locals={"t": 66, "h": 1},
     )
-    operation = SimpleNamespace(__name__="sol_attn_core")
+    output = (torch.empty(1, 66, 1, 128), torch.empty(1), torch.empty(1))
     monkeypatch.setattr(token.importlib.metadata, "version", lambda name: "0.2.37")
     monkeypatch.setattr(token, "capture_token_admission", lambda _locals: {"complete": True, "token_aug": 256})
-    observer.record_event(record, frame, "c_return", SimpleNamespace(__name__="other"))
+    observer.record_event(record, frame, "c_return", SimpleNamespace(__name__="sol_attn_core"))
     assert record["calls"] == 0
-    observer.record_event(record, frame, "c_return", operation)
+    observer.record_event(record, frame, "return", output)
     assert record["calls"] == 1 and record["complete"]
-    observer.record_event(record, frame, "c_return", operation)
+    observer.record_event(record, frame, "return", output)
     assert record["calls"] == 2 and record["unobserved"] == "multiple_core_calls"
+
+
+def test_actual_python_profile_return_event_is_captured(monkeypatch):
+    from h3_flow_regenerate import native_token_admission as token
+
+    # Compile an ordinary Python function with the actual wrapper filename:
+    # c_return naming is not guaranteed for extension calls, but Python
+    # function return profiling is. The fake core is *not* a numerical test.
+    code = compile(
+        "def sol_attn_chunked():\\n"
+        "    t, h, token_aug = 66, 1, 256\\n"
+        "    ws, p = object(), {}\\n"
+        "    sol_attn_core()\\n"
+        "    return (output, kmean, vscale)\\n",
+        "/opt/site-packages/comfy_kitchen/backends/cuda/__init__.py",
+        "exec",
+    )
+    outputs = (torch.empty(1, 66, 1, 128), torch.empty(1), torch.empty(1))
+    scope = {
+        "sol_attn_core": lambda: None,
+        "output": outputs[0],
+        "kmean": outputs[1],
+        "vscale": outputs[2],
+    }
+    exec(code, scope)
+    monkeypatch.setattr(token.importlib.metadata, "version", lambda name: "0.2.37")
+    monkeypatch.setattr(
+        token,
+        "capture_token_admission",
+        lambda local: {
+            "complete": True,
+            "active": True,
+            "t": local["t"],
+            "h": local["h"],
+            "token_aug": local["token_aug"],
+            "retained_ids_sha256": "same",
+        },
+    )
+    observer = CoreTokenAdmissionObserver()
+    old = sys.getprofile()
+    with observer.observe("A"):
+        assert scope["sol_attn_chunked"]() == outputs
+    assert sys.getprofile() is old
+    assert observer.records["A"]["calls"] == 1
+    assert observer.records["A"]["complete"] is True
+
+
+def test_failed_python_return_does_not_claim_observation(monkeypatch):
+    from h3_flow_regenerate import native_token_admission as token
+
+    code = compile(
+        "def sol_attn_chunked():\\n"
+        "    sol_attn_core()\\n"
+        "    raise RuntimeError('synthetic core failure')\\n",
+        "/opt/site-packages/comfy_kitchen/backends/cuda/__init__.py",
+        "exec",
+    )
+    scope = {"sol_attn_core": lambda: None}
+    exec(code, scope)
+    monkeypatch.setattr(token.importlib.metadata, "version", lambda name: "0.2.37")
+    observer = CoreTokenAdmissionObserver()
+    with pytest.raises(RuntimeError, match="synthetic core failure"), observer.observe("A"):
+        scope["sol_attn_chunked"]()
+    assert observer.records["A"]["complete"] is False
+    assert observer.records["A"]["unobserved"] == "failed_or_unqualified_wrapper_return"
 
 
 def test_thread_profile_restores_on_failure_and_missing_call():
