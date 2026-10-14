@@ -306,7 +306,11 @@ def load_replay_operands(
         projection_policy = metadata.get("source_prefix_projection_policy", H3_TRANSFER_LATTICE)
         if projection_policy == "half_pixel_latent_v1" and uniform_source:
             expected_head = resize_spatial_5d(native_head, h, w, mode="bicubic")
-        elif projection_policy in ("native_vae_rgb_roundtrip_v1", "native_source_carry_v1") and uniform_source:
+        elif (
+            projection_policy
+            in ("native_vae_rgb_roundtrip_v1", "native_source_carry_v1", "native_source_carry_target_band_v1")
+            and uniform_source
+        ):
             from .decode_context import video_latent_fingerprint
 
             receipt = metadata.get("source_prefix_projection", {})
@@ -779,12 +783,17 @@ def audit_local_boundary(
                 frames, [labels[0] - 1, *labels], join_frame=join_frame, rois=static_rois
             )
         if name == "source_grid":
-            carried = identity.get("source_prefix_projection_policy") == "native_source_carry_v1"
-            report["stages"][name]["state_role"] = (
-                "uniform_source_with_previous_native_clean_prediction_head"
-                if carried
-                else "uniform_reduced_view_with_projected_target_grid_head"
-            )
+            projection_policy = identity.get("source_prefix_projection_policy")
+            target_band = projection_policy == "native_source_carry_target_band_v1"
+            carried = target_band or projection_policy == "native_source_carry_v1"
+            if target_band:
+                state_role = "uniform_source_with_target_band_reconciled_previous_native_head"
+            elif carried:
+                state_role = "uniform_source_with_previous_native_clean_prediction_head"
+            else:
+                state_role = "uniform_reduced_view_with_projected_target_grid_head"
+            report["stages"][name]["state_role"] = state_role
+            report["stages"][name]["source_prefix_projection_policy"] = projection_policy
             report["stages"][name]["native_reduced_grid_generation_for_head"] = carried
         if extended:
             LOG.info("H3 local boundary audit: comparing decoder contexts of %s", name)

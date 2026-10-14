@@ -84,7 +84,12 @@ def test_new_controls_are_appended_after_every_historical_widget():
     ]
     assert production["low_sampler_aba"][0] == "BOOLEAN"
     assert production["low_sampler_aba"][1]["default"] is False
-    assert production["source_prefix_projection"][0] == ["latent_bicubic", "vae_rgb_roundtrip", "native_source_carry"]
+    assert production["source_prefix_projection"][0] == [
+        "latent_bicubic",
+        "vae_rgb_roundtrip",
+        "native_source_carry",
+        "native_source_carry_target_band",
+    ]
     assert production["source_prefix_projection"][1]["default"] == "latent_bicubic"
     assert H3PartitionedExactPrefixDiagnosticHandoff.INPUT_TYPES()["optional"]["video_vae"] == ("VAE",)
     assert "uniform_source_detail_transport" not in ordinary

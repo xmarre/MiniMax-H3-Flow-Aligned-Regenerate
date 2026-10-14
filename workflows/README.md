@@ -8,7 +8,7 @@ This directory contains executable examples and non-executable wiring overlays. 
 
 The examples cover the production native-source interface, a preserved legacy layout and two simpler progressive controls:
 
-- `examples/native-source-continuation.workflow.json` uses **MiniMax H3 Native Source Continuation**, native source carry, detail transport enabled and the compact supported settings. It is the recommended progressive example for single chunks and sequences; generate a sequence using the same patched MODEL.
+- `examples/native-source-continuation.workflow.json` uses **MiniMax H3 Native Source Continuation**, native source carry with target-band reconciliation (`native_source_carry_target_band`), detail transport enabled and the compact supported settings. It is the recommended progressive example for single chunks and sequences; generate a sequence using the same patched MODEL.
 - `examples/partitioned-exact-prefix.workflow.json` preserves the legacy **MiniMax H3 Partitioned Exact-Prefix Handoff** defaults exactly. It wires **MiniMax H3 Latent Upscaler Provider (3D)** and stores `progressive_uniform_source`, `main_then_shadow`, `frame_gauge_repair=false`, exact-mask audio semantics, the current 16/6 stored audio/video overlap widths, `suffix_dc_bridge=false` and the unused `target_band_tokens=4`.
 - `examples/progressive-target-input.workflow.json` remains the general Target Input control. It uses `source_scale=0.70`, fixed `handoff_coordinate=0.35`, `direction+temporal`, and `learned_3d` transfer.
 - `examples/progressive-source-input.workflow.json` remains the dependency-minimal source-input control. Generation starts from an `864x480` source-grid latent and hands off to a `1.20x` target scale in the same sampler run.
