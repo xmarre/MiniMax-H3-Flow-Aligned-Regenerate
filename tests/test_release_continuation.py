@@ -50,7 +50,7 @@ def test_retired_controls_reject_malformed_serialized_values(controls, error):
         retire_low_replay_controls(SimpleNamespace(model_options={}), Metrics(), **controls)
 
 
-@pytest.mark.parametrize("projection", ["native_source_carry", "latent_bicubic"])
+@pytest.mark.parametrize("projection", ["native_source_carry", "latent_bicubic", "native_source_carry_target_band"])
 @pytest.mark.parametrize("detail", [False, True])
 def test_production_interface_uses_existing_runtime_contract(monkeypatch, projection, detail):
     def base_patch(self, **kwargs):
@@ -76,8 +76,13 @@ def test_production_interface_uses_existing_runtime_contract(monkeypatch, projec
         low_native_trace_step=5,
         low_native_trace_token_admission=True,
     )
-    assert (SOURCE_PREFIX_CARRY_KEY in new.model_options) == (projection == "native_source_carry")
-    assert (SOURCE_PREFIX_CARRY_KEY in old.model_options) == (projection == "native_source_carry")
+    carried = projection != "latent_bicubic"
+    assert (SOURCE_PREFIX_CARRY_KEY in new.model_options) == carried
+    assert (SOURCE_PREFIX_CARRY_KEY in old.model_options) == carried
+    if carried:
+        target_band = projection == "native_source_carry_target_band"
+        assert new.model_options[SOURCE_PREFIX_CARRY_KEY].target_band is target_band
+        assert old.model_options[SOURCE_PREFIX_CARRY_KEY].target_band is target_band
     assert {k: v for k, v in new.model_options.items() if k != SOURCE_PREFIX_CARRY_KEY} == {
         k: v for k, v in old.model_options.items() if k != SOURCE_PREFIX_CARRY_KEY
     }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import threading
 import time
 from contextlib import contextmanager
@@ -10,11 +11,28 @@ from dataclasses import dataclass
 from functools import wraps
 
 import torch
+import torch.nn.functional as F
 
 from .decode_context import _frames, video_latent_fingerprint
 
 SOURCE_PREFIX_CARRY_KEY = "h3_flow_source_prefix_carry_v1"
 SOURCE_PREFIX_CARRY_POLICY = "native_source_carry_v1"
+SOURCE_PREFIX_TARGET_BAND_POLICY = "native_source_carry_target_band_v1"
+# Latent-space constants for target-band reconciliation, in source latent cells
+# (16 source pixels each). The band is a Gaussian low-pass, including the frame
+# mean, with amplitude response 0.92 at a 16-cell wavelength, 0.73 at 8 and
+# 0.29 at 4 cells.
+TARGET_BAND_SIGMA = 1.0
+# Structure agreement is judged on a mid band, gaussian(1) - gaussian(4), so a
+# uniform or very slow latent offset never counts as disagreement. The ratio
+# r = |mid(G) - mid(C)| / rms(mid(C), mid(G)) is pooled over channels and
+# smoothed locally. For equal-amplitude content displaced by a fraction p of its
+# wavelength, r = 2|sin(pi p)|; uncorrelated content gives r ~ 1.41. Carry detail
+# is replaced by the target's from r = 0.35 (p ~ 0.06) and fully from r = 0.7
+# (p ~ 0.11), so displaced, disoccluded or replaced content never combines the
+# target's layout with the carry's detail.
+TARGET_BAND_GATE_SIGMA = 4.0
+TARGET_BAND_GATE = (0.35, 0.7)
 
 
 def _owned_video(video):
@@ -49,7 +67,8 @@ class SourcePrefixCarry:
     cannot enter it. No generated state is retained on CUDA.
     """
 
-    def __init__(self):
+    def __init__(self, *, target_band=False):
+        self.target_band = bool(target_band)
         self._lock = threading.Lock()
         self._thread = None
         self._guider = None
@@ -206,6 +225,99 @@ class SourcePrefixCarry:
             "extra_vae_encode_calls": 0,
             "elapsed_ms": (time.perf_counter() - started) * 1000,
         }
+
+
+def _gaussian_blur(video, sigma):
+    radius = max(1, math.ceil(3.0 * sigma))
+    offsets = torch.arange(-radius, radius + 1, dtype=torch.float32, device=video.device)
+    kernel = torch.exp(-0.5 * (offsets / sigma).square())
+    kernel = kernel / kernel.sum()
+    b, c, t, h, w = video.shape
+    work = video.permute(0, 2, 1, 3, 4).reshape(b * t * c, 1, h, w)
+    # Mirror padding keeps fine alternating detail alternating at the border;
+    # edge replication would turn it into spurious low-frequency structure.
+    mode_w = "reflect" if radius < w else "replicate"
+    mode_h = "reflect" if radius < h else "replicate"
+    work = F.conv2d(F.pad(work, (radius, radius, 0, 0), mode=mode_w), kernel.view(1, 1, 1, -1))
+    work = F.conv2d(F.pad(work, (0, 0, radius, radius), mode=mode_h), kernel.view(1, 1, -1, 1))
+    return work.reshape(b, t, c, h, w).permute(0, 2, 1, 3, 4)
+
+
+def _rms(value):
+    return float(value.square().mean().sqrt().item())
+
+
+def reconcile_target_band(carry, target_projection, *, sigma=TARGET_BAND_SIGMA, gate=TARGET_BAND_GATE):
+    """Take the carried prefix's low spatial band from the returned target.
+
+    ``carry`` (C) is the preceding low/probe clean prediction; ``target_projection``
+    (G) is the authoritative target prefix resized to the same source grid. With
+    ``D = G - C`` and ``B = gaussian_sigma(D)``, each frame and channel becomes
+    ``C + B + w * (D - B)``. The weight ``w`` is 0 where the mid-band structure of
+    C and G agrees and 1 where it is displaced, disoccluded or different. These
+    are latent-space properties:
+
+    - the low band, including the frame mean, is always the target's;
+    - where structure agrees, the carry's above-band component is kept;
+    - where it disagrees, the output equals G exactly.
+
+    Whether this preserves decoded objects, geometry or tone is a hypothesis for
+    rendered validation, not a property of this function.
+    """
+    started = time.perf_counter()
+    if (
+        not torch.is_tensor(carry)
+        or not torch.is_tensor(target_projection)
+        or carry.ndim != 5
+        or carry.shape != target_projection.shape
+    ):
+        raise ValueError("target-band carry reconciliation requires paired source-grid prefixes")
+    sigma = float(sigma)
+    low, high = (float(v) for v in gate)
+    if not math.isfinite(sigma) or sigma <= 0.0:
+        raise ValueError("target-band carry reconciliation requires a positive sigma")
+    if not (math.isfinite(low) and math.isfinite(high) and 0.0 <= low < high):
+        raise ValueError("target-band carry reconciliation requires an increasing gate")
+    work_carry = carry.detach().to(dtype=torch.float32)
+    work_target = target_projection.detach().to(device=work_carry.device, dtype=torch.float32)
+    difference = work_target - work_carry
+    if not bool(torch.isfinite(difference).all()):
+        raise ValueError("target-band carry reconciliation requires finite prefixes")
+    band = _gaussian_blur(difference, sigma)
+    above = difference - band
+
+    def mid(video):
+        return _gaussian_blur(video, sigma) - _gaussian_blur(video, TARGET_BAND_GATE_SIGMA)
+
+    carry_mid, target_mid = mid(work_carry), mid(work_target)
+    disagreement = _gaussian_blur((target_mid - carry_mid).square().sum(1, keepdim=True), sigma)
+    content = _gaussian_blur((carry_mid.square() + target_mid.square()).sum(1, keepdim=True), sigma) * 0.5
+    floor = 0.05 * content.mean(dim=(-2, -1), keepdim=True) + 1e-12
+    ratio = (disagreement / (content + floor)).sqrt()
+    weight = ((ratio - low) / (high - low)).clamp(0.0, 1.0)
+    replaced = weight * above
+    reconciled = (work_carry + band + replaced).to(carry)
+    return reconciled, {
+        "policy": SOURCE_PREFIX_TARGET_BAND_POLICY,
+        "band": "gaussian_spatial_lowpass_including_frame_mean",
+        "sigma_source_cells": sigma,
+        "detail_gate": "mid_band_structure_disagreement",
+        "detail_gate_sigma_source_cells": [sigma, TARGET_BAND_GATE_SIGMA],
+        "detail_gate_ratio": [low, high],
+        "detail_gate_weight_mean": float(weight.mean().item()),
+        "detail_gate_active_fraction": float((weight > 0.0).float().mean().item()),
+        "detail_gate_full_fraction": float((weight >= 1.0).float().mean().item()),
+        "carry_to_target_rms": _rms(difference),
+        "carry_to_target_mean_rms": _rms(difference.mean(dim=(-2, -1))),
+        "carry_to_target_band_rms": _rms(band),
+        "carry_to_target_above_band_rms": _rms(above),
+        "replaced_above_band_rms": _rms(replaced),
+        "last_token_band_rms": _rms(band[:, :, -1:]),
+        "temporal_mixing": False,
+        "extra_h3_nfe": 0,
+        "extra_vae_calls": 0,
+        "elapsed_ms": (time.perf_counter() - started) * 1000,
+    }
 
 
 def source_carry_owner(guider):

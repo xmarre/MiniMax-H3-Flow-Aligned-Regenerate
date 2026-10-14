@@ -13,7 +13,12 @@ from .prefix_projection_audit import _encode_owned_pixels, resize_rgb
 from .source_prefix_carry import SOURCE_PREFIX_CARRY_KEY, SourcePrefixCarry
 
 SOURCE_PREFIX_PROJECTION_KEY = "h3_flow_source_prefix_projection_v1"
-SOURCE_PREFIX_PROJECTION_OPTIONS = ("latent_bicubic", "vae_rgb_roundtrip", "native_source_carry")
+SOURCE_PREFIX_PROJECTION_OPTIONS = (
+    "latent_bicubic",
+    "vae_rgb_roundtrip",
+    "native_source_carry",
+    "native_source_carry_target_band",
+)
 SOURCE_PREFIX_ROUNDTRIP_POLICY = "native_vae_rgb_roundtrip_v1"
 
 
@@ -49,9 +54,9 @@ def configure_source_prefix_projection(model, mode, vae, spatial_stage_control):
     else:
         if spatial_stage_control not in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES:
             raise ValueError(f"{mode} requires a progressive_uniform_source spatial stage")
-        if mode == "native_source_carry":
+        if mode in ("native_source_carry", "native_source_carry_target_band"):
             options.pop(SOURCE_PREFIX_PROJECTION_KEY, None)
-            options[SOURCE_PREFIX_CARRY_KEY] = SourcePrefixCarry()
+            options[SOURCE_PREFIX_CARRY_KEY] = SourcePrefixCarry(target_band=mode == "native_source_carry_target_band")
             model.model_options = options
             return
         if vae is None:
