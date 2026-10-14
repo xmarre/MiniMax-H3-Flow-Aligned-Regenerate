@@ -314,12 +314,17 @@ def test_full_stage_continuity_canvas_uses_current_widget_contract_and_saves_pre
     assert workflow["links"] == [[1, vae["id"], 0, node["id"], 0, "VAE"]]
     spec = H3FlowLocalBoundaryAudit.INPUT_TYPES()
     widgets = {
-        name: kind for group in ("required", "optional") for name, kind in spec[group].items() if kind[0] != "VAE"
+        name: kind
+        for group in ("required", "optional")
+        for name, kind in spec[group].items()
+        if kind[0] not in ("VAE", "IMAGE")
     }
     assert len(widgets) == len(node["widgets_values"])
     values = dict(zip(widgets, node["widgets_values"], strict=True))
     assert values["audit_scope"] == "full_stage_continuity"
     assert values["save_stage_previews"] is True
+    assert values["decoder_context_crosscheck"] is False
+    assert "production_images" not in widgets
     assert values["feature_tracking_enabled"] is True
     assert values["validate_full_video_decoder"] is False
     assert values["bundle_path"] == ""
