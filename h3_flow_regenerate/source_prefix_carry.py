@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import threading
 import time
 from contextlib import contextmanager
@@ -10,11 +11,17 @@ from dataclasses import dataclass
 from functools import wraps
 
 import torch
+import torch.nn.functional as F
 
 from .decode_context import _frames, video_latent_fingerprint
 
 SOURCE_PREFIX_CARRY_KEY = "h3_flow_source_prefix_carry_v1"
 SOURCE_PREFIX_CARRY_POLICY = "native_source_carry_v1"
+SOURCE_PREFIX_TARGET_BAND_POLICY = "native_source_carry_target_band_v1"
+# Gaussian sigma in source latent cells (16 source pixels each): amplitude
+# response 0.92 at a 16-cell wavelength, 0.73 at 8 and 0.29 at 4 cells, below
+# the detail a downsampled latent loses. Per-frame DC is excluded.
+TARGET_BAND_SIGMA = 1.0
 
 
 def _owned_video(video):
@@ -49,7 +56,8 @@ class SourcePrefixCarry:
     cannot enter it. No generated state is retained on CUDA.
     """
 
-    def __init__(self):
+    def __init__(self, *, target_band=False):
+        self.target_band = bool(target_band)
         self._lock = threading.Lock()
         self._thread = None
         self._guider = None
@@ -206,6 +214,69 @@ class SourcePrefixCarry:
             "extra_vae_encode_calls": 0,
             "elapsed_ms": (time.perf_counter() - started) * 1000,
         }
+
+
+def _gaussian_blur(video, sigma):
+    radius = max(1, math.ceil(3.0 * sigma))
+    offsets = torch.arange(-radius, radius + 1, dtype=torch.float32, device=video.device)
+    kernel = torch.exp(-0.5 * (offsets / sigma).square())
+    kernel = kernel / kernel.sum()
+    b, c, t, h, w = video.shape
+    work = video.permute(0, 2, 1, 3, 4).reshape(b * t * c, 1, h, w)
+    work = F.conv2d(F.pad(work, (radius, radius, 0, 0), mode="replicate"), kernel.view(1, 1, 1, -1))
+    work = F.conv2d(F.pad(work, (0, 0, radius, radius), mode="replicate"), kernel.view(1, 1, -1, 1))
+    return work.reshape(b, t, c, h, w).permute(0, 2, 1, 3, 4)
+
+
+def _rms(value):
+    return float(value.square().mean().sqrt().item())
+
+
+def reconcile_target_band(carry, target_projection, *, sigma=TARGET_BAND_SIGMA):
+    """Replace the carried prefix's spatial band with the returned target's.
+
+    ``carry`` is the preceding low/probe clean prediction; ``target_projection``
+    is the authoritative target prefix resized to the same source grid. The
+    result keeps the carry's per-frame channel means and its fine detail above
+    the band, and takes the band from the target. Scene layout therefore follows
+    the returned video, while native detail and tone stay with the carry.
+    """
+    started = time.perf_counter()
+    if (
+        not torch.is_tensor(carry)
+        or not torch.is_tensor(target_projection)
+        or carry.ndim != 5
+        or carry.shape != target_projection.shape
+    ):
+        raise ValueError("target-band carry reconciliation requires paired source-grid prefixes")
+    if not math.isfinite(float(sigma)) or float(sigma) <= 0.0:
+        raise ValueError("target-band carry reconciliation requires a positive sigma")
+    work_carry = carry.detach().to(dtype=torch.float32)
+    difference = target_projection.detach().to(device=work_carry.device, dtype=torch.float32) - work_carry
+    if not bool(torch.isfinite(difference).all()):
+        raise ValueError("target-band carry reconciliation requires finite prefixes")
+    dc = difference.mean(dim=(-2, -1), keepdim=True)
+    band = _gaussian_blur(difference - dc, float(sigma))
+    band = band - band.mean(dim=(-2, -1), keepdim=True)
+    reconciled = (work_carry + band).to(carry)
+    residual = difference - dc - band
+    last = band[:, :, -1:]
+    return reconciled, {
+        "policy": SOURCE_PREFIX_TARGET_BAND_POLICY,
+        "band": "gaussian_spatial_lowpass_without_frame_dc",
+        "sigma_source_cells": float(sigma),
+        "carry_to_target_rms": _rms(difference),
+        "carry_to_target_dc_rms": _rms(dc),
+        "carry_to_target_band_rms": _rms(band),
+        "carry_to_target_above_band_rms": _rms(residual),
+        "last_token_band_rms": _rms(last),
+        "carry_dc_preserved": True,
+        "carry_above_band_detail_preserved": True,
+        "temporal_mixing": False,
+        "extra_h3_nfe": 0,
+        "extra_vae_calls": 0,
+        "elapsed_ms": (time.perf_counter() - started) * 1000,
+    }
 
 
 def source_carry_owner(guider):

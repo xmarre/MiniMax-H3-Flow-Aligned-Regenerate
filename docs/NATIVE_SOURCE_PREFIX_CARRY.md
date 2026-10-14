@@ -59,6 +59,99 @@ no silent bicubic fallback. Latent processing between generation and continuatio
 that changes the carried target bytes will fail the pairing check. This includes
 post-sampling refinement that changes the authoritative prefix.
 
+## Target-band reconciliation
+
+`source_prefix_projection=native_source_carry_target_band` is an experimental
+variant. Pairing, ownership and failure behavior match native carry. Only the
+bytes supplied as the reduced-grid protected prefix change.
+
+### What the reduced-grid stage sees
+
+H3 receives protected prefix rows as clean conditioning. Core labels them with
+the visual-condition timestep and re-injects them at every step. Generated rows
+attend to these rows from the first sampler step onward. The reduced-grid stage
+runs the highest-noise steps, where the composition of the generated suffix is
+decided.
+
+With native carry, those rows are the preceding chunk's low/probe clean
+prediction at the handoff sigma, roughly 0.87 for the default handoff
+coordinate. Target-high refinement of that chunk starts at this sigma and can
+still add, remove or redraw background objects. The reduced-grid stage of the
+next chunk therefore continues an earlier estimate of the scene, not the video
+that was returned and shown. The target-high stage then receives the exact
+returned prefix. Its direction guidance pulls generated tokens toward the
+reduced-grid reference, below the low-frequency cutoff. When the two scene
+versions disagree, the suffix can follow the returned prefix near the join and
+the earlier estimate further away.
+
+### Construction
+
+Let `C` be the carried prefix and `G` the returned target prefix resized to the
+source grid. `G` uses the existing half-pixel latent resize, the same operation
+that `latent_bicubic` uses. For each frame and channel:
+
+```text
+D = G - C
+B = gaussian_sigma_1(D - mean_hw(D))
+B = B - mean_hw(B)
+prefix = C + B
+```
+
+The Gaussian sigma is one source latent cell, 16 source pixels. Its amplitude
+response is about 0.92 at a 16-cell wavelength, 0.73 at 8 cells and 0.29 at 4
+cells. A two-cell checkerboard passes at under one percent. The result therefore has:
+
+- the returned target's coarse spatial layout: object presence, position, shape
+  and color regions;
+- the carry's per-frame channel means, so the established tone path is unchanged;
+- the carry's detail above the band. Latent resize was previously rejected because
+  it lost this detail.
+
+There is no temporal filtering, no motion estimate and no correspondence search.
+Each prefix frame is reconciled with the target frame at the same time. Generated
+suffix initialization, noise, masks, sigma schedule, audio, learned transfer, exact
+target-prefix restoration and target-high are unchanged. The option constrains
+no generated token directly. Its effect on the suffix comes only through H3's
+native attention to the protected rows. Motion, occlusion, camera changes and
+prompted scene transitions remain under model and prompt control. When the
+returned prefix itself ends on a new shot, the reconciled prefix shows that shot.
+
+The `partitioned_source_prefix_projection` receipt records policy
+`native_source_carry_target_band_v1`, the underlying `native_source_carry_v1`
+pairing, and RMS values for the carry-to-target DC, band and above-band
+differences. The reconciliation runs on the small protected prefix before the first
+sampler lifetime. It allocates prefix-sized temporaries only and retains nothing
+between chunks. The next chunk's carry is still that chunk's own low/probe
+prediction.
+
+### Relation to rejected alternatives
+
+- **Bicubic or half-pixel prefix replacement** replaced the whole carry. Its
+  source decodes were blurred and darker. This option keeps the carry's detail
+  and DC and takes only the coarse band from the resize.
+- **Exact visual reference rows** added conditioning rows and changed target
+  timeline positions. This option adds no rows and leaves RoPE positions unchanged.
+- **Suffix DC/tone bridges, frame-gauge or geometric corrections** modified
+  generated output. This option changes only the conditioning prefix.
+- **Relaxed temporal correspondence** was not changed. The guidance matcher and
+  its prefix-crossing exclusion remain as released.
+
+### Limits
+
+The band limit is a fixed choice, not one fitted to rendered results. Objects
+smaller than a few source latent cells are mostly above the band and still
+follow the carry. Where the scene versions disagree, coarse target layout can
+sit under carry detail from a different object. The reduced-grid stage regenerates
+that region, and only the exact target prefix is returned. A resize of the target
+latent is assumed to represent coarse structure on the source grid, as the
+`latent_bicubic` path already assumes.
+
+Real-path CPU tests use small random-weight H3 blocks with Sol and native
+attention. They cover the exact prefix bytes, unchanged suffix inputs and audio,
+bitwise protected output, a deterministic change in generated tokens, successive
+chunk pairing, failure before sampling with retry, and capture replay. They do
+not establish trained-model scene continuity. That requires rendered sequences.
+
 ## Ownership and failure behavior
 
 A model-local owner retains one detached CPU float32 source clip and a small

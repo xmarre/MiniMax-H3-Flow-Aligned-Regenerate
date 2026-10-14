@@ -595,7 +595,9 @@ class H3PartitionedExactPrefixDiagnosticHandoff(H3PartitionedExactPrefixHandoff)
                     "prefix remains exact. Adds one VAE decode and one encode per continuation chunk. "
                     "native_source_carry instead uses the preceding chunk's source clean prediction, paired "
                     "by the exact returned target-prefix hash; run the full sequence with the same patched MODEL. "
-                    "No VAE is needed for carry; missing or changed context stops before sampling."
+                    "No VAE is needed for carry; missing or changed context stops before sampling. "
+                    "native_source_carry_target_band additionally takes the carry's coarse spatial band from the "
+                    "returned target prefix."
                 ),
             },
         )
@@ -791,13 +793,15 @@ class H3NativeSourceContinuationHandoff(H3PartitionedExactPrefixDiagnosticHandof
             "Adds no model or VAE call. May affect suffix detail; compare rendered output."
         )
         spec["required"]["source_prefix_projection"] = (
-            ["native_source_carry", "latent_bicubic"],
+            ["native_source_carry", "latent_bicubic", "native_source_carry_target_band"],
             {
                 "default": "native_source_carry",
                 "tooltip": (
                     "Native carry reuses the preceding source prediction, paired by the returned target suffix. "
                     "The complete sequence must use this same MODEL. Latent bicubic reconstructs the "
-                    "source prefix from the target prefix. Neither mode modifies protected target bytes."
+                    "source prefix from the target prefix. Target band keeps the native carry's detail and "
+                    "tone but takes its coarse scene layout from the returned target, so the reduced-grid stage "
+                    "continues the scene that was actually rendered. No mode modifies protected target bytes."
                 ),
             },
         )
@@ -830,8 +834,11 @@ class H3NativeSourceContinuationHandoff(H3PartitionedExactPrefixDiagnosticHandof
     ):
         if audio_guided_overlap_mode not in ("sampler_mask_exact_timestep", "exact_mask", "sampler_mask"):
             raise ValueError("native source continuation requires a coherent audio mask mode")
-        if source_prefix_projection not in ("native_source_carry", "latent_bicubic"):
-            raise ValueError("native source continuation supports native_source_carry or latent_bicubic")
+        if source_prefix_projection not in ("native_source_carry", "latent_bicubic", "native_source_carry_target_band"):
+            raise ValueError(
+                "native source continuation supports native_source_carry, native_source_carry_target_band "
+                "or latent_bicubic"
+            )
         return super().patch(
             model=model,
             trajectory=trajectory,

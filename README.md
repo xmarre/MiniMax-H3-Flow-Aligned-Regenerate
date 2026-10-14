@@ -88,6 +88,12 @@ unchanged. [Native carry contract](docs/NATIVE_SOURCE_PREFIX_CARRY.md).
 
 `latent_bicubic` is available when paired native context is unsuitable. It
 reconstructs only the source prefix; the authoritative target prefix remains exact.
+`native_source_carry_target_band` is an experimental native carry option. It
+keeps the carry's fine detail and per-frame tone but takes its coarse spatial
+layout from the returned target prefix. The reduced-grid stage then continues the
+scene that was actually rendered rather than the preceding chunk's earlier
+reduced-grid estimate. See
+[target-band reconciliation](docs/NATIVE_SOURCE_PREFIX_CARRY.md#target-band-reconciliation).
 Detail transport is enabled for new production nodes. It adds a last-prefix
 exact-minus-learned detail residual before high refinement only when its
 calibration and holdout checks pass. Otherwise it reports a skipped correction.

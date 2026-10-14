@@ -165,3 +165,84 @@ def test_continuum_unlabeled_initial_binds_only_first_labeled_continuation():
     request["chunk_index"] = 2
     with owner.transaction(guider), pytest.raises(RuntimeError, match="immediately preceding"):
         owner.project(target[:, :, -7:], 4, 6)
+
+
+def _blob(h, w, cy, cx, radius):
+    yy, xx = torch.meshgrid(torch.arange(h).float(), torch.arange(w).float(), indexing="ij")
+    return torch.exp(-((yy - cy).square() + (xx - cx).square()) / (2 * radius**2))
+
+
+def _checker(h, w):
+    yy, xx = torch.meshgrid(torch.arange(h), torch.arange(w), indexing="ij")
+    return ((yy + xx) % 2).float() * 2 - 1
+
+
+def test_target_band_takes_scene_layout_and_keeps_carry_detail_and_tone():
+    from h3_flow_regenerate.source_prefix_carry import SOURCE_PREFIX_TARGET_BAND_POLICY, reconcile_target_band
+
+    gen = torch.Generator().manual_seed(4)
+    h, w = 24, 32
+    scene = torch.randn(1, 24, 7, h, w, generator=gen) * 0.05
+    plant = _blob(h, w, 8, 22, 2.5)
+    detail = _checker(h, w) * 0.3
+    target = scene + plant
+    carry = scene + detail + 0.2
+    carry[:, :, 3] += 0.1
+    out, receipt = reconcile_target_band(carry, target)
+
+    assert out.shape == carry.shape and out.dtype == carry.dtype
+    assert torch.allclose(out.mean((-1, -2)), carry.mean((-1, -2)), atol=1e-5)
+    added = out - carry
+    region = plant > 0.5
+    plant_dc = plant - plant.mean()
+    assert float(added[..., region].mean()) > 0.6 * float(plant_dc[region].mean())
+    assert float((out - target - (carry - target).mean((-1, -2), keepdim=True))[..., region].abs().mean()) < float(
+        (carry - target - (carry - target).mean((-1, -2), keepdim=True))[..., region].abs().mean()
+    )
+    detail_kept = ((out - target) * detail).mean() / detail.square().mean()
+    assert float(detail_kept) > 0.95
+    assert receipt["policy"] == SOURCE_PREFIX_TARGET_BAND_POLICY
+    assert receipt["extra_h3_nfe"] == receipt["extra_vae_calls"] == 0
+    assert receipt["temporal_mixing"] is False
+
+
+def test_target_band_agreement_is_identity_and_frames_stay_independent():
+    from h3_flow_regenerate.source_prefix_carry import reconcile_target_band
+
+    gen = torch.Generator().manual_seed(5)
+    carry = torch.randn(1, 24, 7, 16, 20, generator=gen)
+    same, receipt = reconcile_target_band(carry, carry.clone())
+    assert torch.equal(same, carry)
+    assert receipt["carry_to_target_rms"] == 0.0
+
+    offset_only, _ = reconcile_target_band(carry, carry + torch.randn(1, 24, 7, 1, 1, generator=gen))
+    assert torch.allclose(offset_only, carry, atol=1e-6)
+
+    target = carry.clone()
+    target[:, :, 6] += _blob(16, 20, 8, 10, 3.0)
+    moved, _ = reconcile_target_band(carry, target)
+    assert torch.equal(moved[:, :, :6], carry[:, :, :6])
+    assert not torch.equal(moved[:, :, 6], carry[:, :, 6])
+
+
+def test_target_band_rejects_unpaired_or_non_finite_prefixes():
+    from h3_flow_regenerate.source_prefix_carry import reconcile_target_band
+
+    carry = torch.zeros(1, 24, 7, 8, 8)
+    with pytest.raises(ValueError, match="paired"):
+        reconcile_target_band(carry, torch.zeros(1, 24, 7, 8, 10))
+    bad = carry.clone()
+    bad[0, 0, 0, 0, 0] = float("nan")
+    with pytest.raises(ValueError, match="finite"):
+        reconcile_target_band(carry, bad)
+    with pytest.raises(ValueError, match="positive sigma"):
+        reconcile_target_band(carry, carry, sigma=0.0)
+
+
+@pytest.mark.parametrize("mode", ["native_source_carry", "native_source_carry_target_band"])
+def test_projection_mode_selects_target_band_owner(mode):
+    model = SimpleNamespace(model_options={})
+    configure_source_prefix_projection(model, mode, None, "progressive_uniform_source")
+    owner = model.model_options["h3_flow_source_prefix_carry_v1"]
+    assert isinstance(owner, SourcePrefixCarry)
+    assert owner.target_band is (mode == "native_source_carry_target_band")
