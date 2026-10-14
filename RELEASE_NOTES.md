@@ -1,3 +1,61 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.13
+
+## Scene-consistent continuation by default
+
+**MiniMax H3 Native Source Continuation** adds
+`source_prefix_projection=native_source_carry_target_band` and makes it the
+default for new nodes. Before, continuation chunks could redraw or replace
+background content a few frames after the join, and the visible boundary
+followed.
+
+Native carry conditioned the reduced-grid stage on the preceding chunk's
+low/probe clean prediction at the handoff sigma. Target-high refinement then
+changed that scene, so the next chunk composed its continuation from an earlier
+scene estimate rather than the video that was returned. The new default rebuilds
+the protected latent prefix of the reduced-grid stage:
+
+- its Gaussian low band (sigma one source latent cell) comes from the half-pixel
+  resized returned target prefix;
+- the carry's finer component is kept where mid-band latent structure of carry
+  and target agrees, and replaced by the target's where it is displaced,
+  disoccluded or different.
+
+In user-reviewed continuation renders this removed the visible boundary and the
+background redraw after the join. These renders were not matched same-seed
+comparisons. See
+[target-band reconciliation](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/blob/v0.3.13/docs/NATIVE_SOURCE_PREFIX_CARRY.md#target-band-reconciliation).
+
+## Contracts and cost
+
+Native-carry pairing, protected target and audio bytes, masks, sigma schedules,
+the three sampler lifetimes and Sol/native attention contracts are unchanged.
+The reconciliation runs once per continuation chunk on the protected prefix
+before the first sampler lifetime. It adds no H3, provider or VAE call and
+retains no state between chunks. A non-finite result stops before sampling and
+keeps the preceding pair available for a retry.
+
+The `partitioned_source_prefix_projection` receipt records policy
+`native_source_carry_target_band_v1` with band and gate statistics. Boundary
+capture records the same policy. Local Boundary Audit replays it and reports a
+distinct `source_grid` role and `source_prefix_projection_policy`.
+
+## Compatibility
+
+Saved workflows keep their stored `source_prefix_projection`; select
+`native_source_carry_target_band` to adopt the new default. `native_source_carry`
+remains available as the previous behavior. The legacy node's `latent_bicubic`
+default is unchanged. The native-source canvas/API example workflows use the
+new default.
+
+## Known limitations
+
+Differences confined to fine structure, such as thin wires shifted over an
+unchanged layout, keep the carry's detail. Unprompted new shots that the model
+chooses on its own are not addressed; prompted transitions remain under prompt
+control. Slight continuation darkening is not claimed fixed.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.12
 
 ## Recommended progressive H3 node

@@ -333,7 +333,7 @@
         "sampler_mask_exact_timestep",
         16,
         true,
-        "native_source_carry",
+        "native_source_carry_target_band",
         false
       ],
       "title": "MiniMax H3 Native Source Continuation"
@@ -722,7 +722,7 @@
         "Node name for S&R": "MarkdownNote"
       },
       "widgets_values": [
-        "# Native source generation\n\nRecommended progressive MiniMax H3 path for single chunks and Continuum Native Masked sequences. Connect VDN-H3-Plus and the learned 3D upscaler, and wire the patched MODEL to both scheduler and guider.\n\nWithout a protected prefix, generation uses ordinary low/probe/high learned transfer. For a sequence, reuse the same patched MODEL from the initial chunk through every continuation so native source carry can pair the preceding source prediction with the exact returned target suffix.\n\nDefaults: source scale 0.70, fixed handoff 0.35, direction+temporal guidance, native_source_carry, detail transport enabled, exact audio mask, witness capture disabled. Change loader filenames to match your installed models."
+        "# Native source generation\n\nRecommended progressive MiniMax H3 path for single chunks and Continuum Native Masked sequences. Connect VDN-H3-Plus and the learned 3D upscaler, and wire the patched MODEL to both scheduler and guider.\n\nWithout a protected prefix, generation uses ordinary low/probe/high learned transfer. For a sequence, reuse the same patched MODEL from the initial chunk through every continuation so native source carry can pair the preceding source prediction with the exact returned target suffix.\n\nDefaults: source scale 0.70, fixed handoff 0.35, direction+temporal guidance, native_source_carry_target_band (native carry whose coarse latent layout follows the returned video), detail transport enabled, exact audio mask, witness capture disabled. Change loader filenames to match your installed models."
       ],
       "title": "Native source generation example"
     }

@@ -53,8 +53,13 @@ the preceding returned target suffix and stops before sampling when that context
 is missing or mismatched.
 
 New nodes default to source scale `0.70`, fixed handoff `0.35`,
-`direction+temporal` guidance, native source carry, coherent exact audio masks
-and detail transport enabled. Capture is optional and off. Detail transport
+`direction+temporal` guidance, native source carry with target-band
+reconciliation (`native_source_carry_target_band`), coherent exact audio masks
+and detail transport enabled. Target band conditions the reduced-grid stage on
+the coarse latent layout of the returned video rather than the preceding chunk's
+earlier estimate. Saved workflows keep their stored projection value; select
+`native_source_carry_target_band` to adopt it, or `native_source_carry` for the
+previous behavior. Capture is optional and off. Detail transport
 applies only when calibration and holdout checks pass. Existing saved false
 values and legacy-node defaults are retained. See the
 [native carry contract](NATIVE_SOURCE_PREFIX_CARRY.md) and canvas/API examples
