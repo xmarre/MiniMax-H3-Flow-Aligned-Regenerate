@@ -61,8 +61,8 @@ of the low/probe carrier, uniform reduced-grid provider input, provider output,
 pre-high state, first actual high prediction before and after Flow, sampler
 input, mask and final state. The bundle is written under
 `output/h3_flow_regenerate/residual_geometry` for Local Boundary Audit.
-This uses the existing stage-evidence path with a 256 MiB CPU byte budget and
-requires native decoder timing. It adds copies and disk I/O without model,
+This uses the existing stage-evidence path with a geometry-derived CPU byte
+budget (see below) and requires native decoder timing. It adds copies and disk I/O without model,
 provider or VAE calls. It does not enable the VDN feature sink or change
 `frame_gauge_residual_mode`; capture remains off by default.
 
@@ -91,8 +91,13 @@ before the band splice, the high-stage entry clean state, the first actual high
 prediction before/after Flow, and the final clean video. The manifest identifies
 the protected prefix, band/tail edge, tensor grids and stage domains. The native
 low/probe carrier contains reduced-grid storage windows and padding and must
-not be decoded as ordinary target-grid video. Full snapshots have a 256 MiB
-CPU tensor budget; exceeding it reports an error. This opt-in mode adds CPU
+not be decoded as ordinary target-grid video. The CPU tensor budget is derived
+from the target grid and timeline: every named full-video stage, its decoder
+window, the prefix and the bounded high-call windows, with a 256 MiB floor.
+Host memory for captured tensors therefore grows with resolution and length
+(about 486 MiB for a 96×64-latent, 62-token timeline), plus a transient copy
+per tensor during export. A snapshot outside the budgeted stage set, or one
+that exceeds the budget, reports an error. This opt-in mode adds CPU
 copies and output-file I/O, with no additional model/provider/VAE evaluations.
 The paired-prefix frame gauge remains inactive in band mode.
 

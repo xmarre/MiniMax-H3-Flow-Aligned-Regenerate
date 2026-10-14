@@ -251,8 +251,9 @@ same-grid join next to the carried prefix at a lower low/probe cost.
 `capture_boundary_witness=true` saves the target-band stage tensors for Local
 Boundary Audit under `output/h3_flow_regenerate/residual_geometry`, including
 the first actual high prediction before and after Flow. It works with
-`frame_gauge_residual_mode=off`, retains the 256 MiB CPU capture budget and native
-decoder timing requirements, and adds copy and disk-write time. Other
+`frame_gauge_residual_mode=off`, sizes its CPU capture budget from the target
+grid and timeline (256 MiB minimum; host memory grows with resolution), retains
+native decoder timing requirements, and adds copy and disk-write time. Other
 partitioned modes retain the existing VDN feature witness. Capture is off by
 default and adds no model, provider or VAE evaluations.
 

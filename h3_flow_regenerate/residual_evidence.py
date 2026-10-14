@@ -18,6 +18,34 @@ from .vae_boundary_video import (
     H3_VAE_WINDOW_TOKENS,
 )
 
+FULL_VIDEO_STAGE_NAMES = (
+    "low_probe_native_carrier_clean",
+    "source_probe_clean",
+    "provider_native_clean",
+    "pre_high_exact_restored",
+    "initial_high_video_mask",
+    "first_high_before_flow",
+    "first_high_sampler_input",
+    "first_high_after_flow",
+    "final_post_high_internal_clean",
+)
+HIGH_PREDICTION_TRACE_MAX_CALLS = 16
+MIN_FULL_VIDEO_BYTE_BUDGET = 256 * 1024 * 1024
+
+
+def full_video_byte_budget(exact_prefix: torch.Tensor, temporal: int) -> int:
+    """Upper bound for every named stage snapshot plus the bounded high-call trace.
+
+    Full-timeline snapshots scale with the target grid, so a fixed budget rejects
+    larger resolutions. Elements are budgeted at no less than float32 width.
+    """
+    token_bytes = exact_prefix[:, :, :1].numel() * max(exact_prefix.element_size(), 4)
+    window_bytes = token_bytes * H3_VAE_WINDOW_TOKENS
+    prefix_bytes = token_bytes * int(exact_prefix.shape[2]) + window_bytes
+    stage_bytes = len(FULL_VIDEO_STAGE_NAMES) * (token_bytes * int(temporal) + window_bytes)
+    trace_bytes = 2 * HIGH_PREDICTION_TRACE_MAX_CALLS * window_bytes
+    return max(MIN_FULL_VIDEO_BYTE_BUDGET, prefix_bytes + stage_bytes + trace_bytes)
+
 
 class BoundaryWindowEvidence:
     """CPU stage snapshots, with optional full video for target-band evidence."""
@@ -28,7 +56,7 @@ class BoundaryWindowEvidence:
         temporal: int,
         *,
         capture_full_video: bool = False,
-        max_bytes=256 * 1024 * 1024,
+        max_bytes: int | None = None,
     ):
         prefix_t = int(exact_prefix.shape[2])
         start = prefix_t - H3_VAE_TOKEN_OVERLAP
@@ -52,7 +80,7 @@ class BoundaryWindowEvidence:
         }
         self.tensors: dict[str, torch.Tensor] = {}
         self.capture_full_video = capture_full_video
-        self.max_bytes = max_bytes
+        self.max_bytes = full_video_byte_budget(exact_prefix, temporal) if max_bytes is None else int(max_bytes)
         self.cpu_tensor_bytes = 0
         self.first_high_call_index: int | None = None
         self.first_high_sigma: float | None = None
@@ -61,7 +89,7 @@ class BoundaryWindowEvidence:
         if capture_full_video:
             self.plan["high_prediction_trace"] = {
                 "policy": "bounded_high_prediction_windows_v1",
-                "max_calls": 16,
+                "max_calls": HIGH_PREDICTION_TRACE_MAX_CALLS,
                 "calls": [],
                 "omitted_call_indices": [],
             }
@@ -80,6 +108,8 @@ class BoundaryWindowEvidence:
             raise RuntimeError("boundary-window snapshot is missing native decoder context")
         snapshots = {name: window}
         if self.capture_full_video:
+            if name != "authoritative_prefix" and name not in FULL_VIDEO_STAGE_NAMES:
+                raise RuntimeError(f"full-video stage snapshot {name!r} is not covered by the CPU byte budget")
             expected_t = self.plan["prefix_t"] if name == "authoritative_prefix" else self.plan["temporal"]
             if video.shape[2] != expected_t:
                 raise RuntimeError("full-video stage snapshot does not match the declared timeline")
@@ -88,7 +118,10 @@ class BoundaryWindowEvidence:
             raise RuntimeError(f"boundary-window snapshot {name!r} was reused")
         size = sum(value.numel() * value.element_size() for value in snapshots.values())
         if self.capture_full_video and self.cpu_tensor_bytes + size > self.max_bytes:
-            raise RuntimeError("full-video stage evidence exceeded its explicit CPU byte budget")
+            raise RuntimeError(
+                f"full-video stage evidence {name!r} needs {self.cpu_tensor_bytes + size} bytes, "
+                f"exceeding its explicit CPU byte budget of {self.max_bytes} bytes"
+            )
         started = time.perf_counter()
         for key, value in snapshots.items():
             self.tensors[key] = value.to(device="cpu", copy=True).contiguous()
