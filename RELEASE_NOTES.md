@@ -1,3 +1,27 @@
+# Unreleased: target-band native source carry
+
+**MiniMax H3 Native Source Continuation** adds the experimental
+`source_prefix_projection=native_source_carry_target_band` option. The default
+remains `native_source_carry`, and saved workflows keep their stored value.
+
+Native carry conditions the reduced-grid stage on the preceding chunk's low/probe
+clean prediction at the handoff sigma. Target-high refinement changes that scene
+afterwards. The new option rebuilds the protected latent prefix of the reduced-grid
+stage from two sources:
+
+- its Gaussian low band (sigma one source latent cell) comes from the half-pixel
+  resized returned target prefix;
+- the carry's remaining finer component is kept unless mid-band latent structure
+  of carry and target disagrees, where the target's replaces it. Differences
+  confined to finer structure keep the carry's component.
+
+Pairing, protected target and audio bytes, masks, schedules, sampler lifetimes
+and backend contracts are unchanged. It adds no H3, provider or VAE call. Boundary
+capture records the `native_source_carry_target_band_v1` policy, and Local
+Boundary Audit replays it. These are latent-space properties. Whether they
+improve rendered scene continuity has not been validated, and unprompted new
+shots are not addressed.
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.12
 
 ## Recommended progressive H3 node

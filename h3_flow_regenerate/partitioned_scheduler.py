@@ -213,7 +213,12 @@ from .seam_diagnostics import (
     recover_conditional_clean_for_diagnostics,
 )
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
-from .source_prefix_carry import SOURCE_PREFIX_CARRY_POLICY, source_carry_owner, source_carry_scope
+from .source_prefix_carry import (
+    SOURCE_PREFIX_CARRY_POLICY,
+    reconcile_target_band,
+    source_carry_owner,
+    source_carry_scope,
+)
 from .source_prefix_projection import (
     SOURCE_PREFIX_PROJECTION_KEY,
     SOURCE_PREFIX_ROUNDTRIP_POLICY,
@@ -3935,8 +3940,19 @@ def run_partitioned_progressive(
             stage_plan.prefix, int(source_h), int(source_w)
         )
         projected_prefix_source = projected_prefix_source.to(low_video)
-        prefix_projection_receipt["projected_prefix"] = video_latent_fingerprint(projected_prefix_source)
         prefix_projection_policy = SOURCE_PREFIX_CARRY_POLICY
+        if source_carry.target_band:
+            projected_prefix_source, band_receipt = reconcile_target_band(
+                projected_prefix_source, generic_prefix_source
+            )
+            prefix_projection_policy = band_receipt["policy"]
+            prefix_projection_receipt.update(
+                policy=prefix_projection_policy,
+                carry_policy=SOURCE_PREFIX_CARRY_POLICY,
+                source_role="previous_chunk_low_probe_clean_prediction_with_returned_target_band",
+                target_band=band_receipt,
+            )
+        prefix_projection_receipt["projected_prefix"] = video_latent_fingerprint(projected_prefix_source)
         binding.metrics.event("partitioned_source_prefix_projection", **prefix_projection_receipt)
     if prefix_projection is not None:
         # Only the carried prefix enters the VAE. This runs before the first
