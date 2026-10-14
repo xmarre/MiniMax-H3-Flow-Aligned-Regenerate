@@ -58,7 +58,9 @@ an even spatial grid and a target larger than the reduced source grid.
 
 Low/probe samples one full-duration clip on the reduced source grid. Native source
 carry reuses the preceding chunk's already-computed source clean prediction,
-paired against the exact returned target suffix. The learned upscaler transfers
+paired against the exact returned target suffix. By default its coarse latent
+layout is first reconciled with the returned video (target band, below), so the
+reduced-grid stage continues the scene that was actually rendered. The learned upscaler transfers
 the generated trajectory to the target grid. High refinement uses the original
 target prefix, and the returned audio/video prefix retains exact ownership.
 Native carry adds no H3, provider or VAE calls. Missing or mismatched source context
@@ -83,11 +85,24 @@ unchanged. [Native carry contract](docs/NATIVE_SOURCE_PREFIX_CARRY.md).
 | `audio_guided_overlap_mode` | `sampler_mask_exact_timestep` (coherent exact mask) |
 | `audio_guided_overlap_ticks` | `16` (zero effective release in exact mode) |
 | `uniform_source_detail_transport` | `true` |
-| `source_prefix_projection` | `native_source_carry` |
+| `source_prefix_projection` | `native_source_carry_target_band` |
 | `capture_boundary_witness` | `false` |
 
-`latent_bicubic` is available when paired native context is unsuitable. It
-reconstructs only the source prefix; the authoritative target prefix remains exact.
+`native_source_carry_target_band` is the new-node default. The plain carry is
+the preceding chunk's reduced-grid estimate at the handoff sigma, and target-high
+refinement can still redraw background content after it. The default therefore
+takes the low spatial band of the protected source prefix from the resized
+returned target prefix. It keeps the carry's finer detail only where the latent
+structure of the two agrees. In user-reviewed continuation renders this removed
+the visible boundary and the background redraw a few frames after the join. It
+adds no H3, provider or VAE call. See
+[target-band reconciliation](docs/NATIVE_SOURCE_PREFIX_CARRY.md#target-band-reconciliation).
+
+Saved workflows keep their stored `source_prefix_projection`. Select
+`native_source_carry_target_band` in an existing workflow to use it.
+`native_source_carry` remains available as the previous behavior. `latent_bicubic`
+is available when paired native context is unsuitable; it reconstructs only the
+source prefix. No mode changes the authoritative target prefix.
 Detail transport is enabled for new production nodes. It adds a last-prefix
 exact-minus-learned detail residual before high refinement only when its
 calibration and holdout checks pass. Otherwise it reports a skipped correction.
