@@ -29,6 +29,7 @@ from .stage_static_roi_audit import (
     measure_stage_static_rois,
     parse_static_rois,
 )
+from .stage_tone_attribution import tone_attribution_ledger
 from .transfer_lattice import H3_TRANSFER_LATTICE, measure_paired_prefix_affine
 
 LOG = logging.getLogger(__name__)
@@ -652,9 +653,17 @@ def audit_local_boundary(
     validate_full_video_decoder=False,
     feature_tracking_enabled=False,
     preview_sink=None,
+    production_images=None,
+    decoder_context_crosscheck=False,
 ):
     if not isinstance(feature_tracking_enabled, bool):
         raise TypeError("feature tracking enabled must be boolean")
+    if not isinstance(decoder_context_crosscheck, bool):
+        raise TypeError("decoder context crosscheck must be boolean")
+    if production_images is not None and scope != "full_stage_continuity":
+        raise ValueError("production IMAGE comparison requires full_stage_continuity scope")
+    if decoder_context_crosscheck and scope != "full_stage_continuity":
+        raise ValueError("decoder context crosscheck requires full_stage_continuity scope")
     if not isinstance(validate_full_video_decoder, bool):
         raise TypeError("full-video decode validation must be boolean")
     if scope not in SCOPES:
@@ -910,10 +919,44 @@ def audit_local_boundary(
             rois=static_rois,
         )
         report["extra_vae_calls"] += 1
+    if full_stages:
+        # Compare identical global pixel times within each saved full-length
+        # decode; keep cross-representation pairs explicitly non-causal.
+        report["stage_tone_attribution"] = tone_attribution_ledger(
+            pixels,
+            [labels[0] - 1, *labels],
+            join_frame,
+            static_rois,
+            production_images=production_images,
+        )
+        if decoder_context_crosscheck:
+            # This is a *standalone* same-time native-window VAE control.
+            # Its samples are not assembled production output: production
+            # blends window latents before clamping.
+            full_plan = {
+                **plan,
+                "token_start": 0,
+                "decoded_origin_frame": join_frame - plan["window_decoded_trim_frames"]
+                if "window_decoded_trim_frames" in plan
+                else join_frame - (17 * ((plan["prefix_t"] - 2) // 5) + 5),
+            }
+            contexts = {}
+            for stage in ("source_grid", "final"):
+                contexts[stage] = measure_window_context(
+                    vae, stages[stage], process_out, full_plan, detail_region=detail_region
+                )
+                report["extra_vae_calls"] += 2
+            report["stage_tone_attribution"]["decoder_context_crosscheck"] = {
+                "window_pair_is_same_global_pixel_time": True,
+                "standalone_window_pixels_do_not_reproduce_production_blend": True,
+                "native_full_timeline_decode_is_primary": True,
+                "stages": contexts,
+            }
     # Preserve the existing final-stage field for report consumers.
     report["final_adjacent_frame_geometry"] = report["stages"]["final"]["adjacent_frame_geometry"]
     if preview_sink is not None:
-        preview_labels = [f for f in (join_frame - 1, join_frame, join_frame + 5, join_frame + 15) if f in labels]
+        offsets = (-1, 0, 1, 2, 3, 5, 12, 15) if full_stages else (-1, 0, 5, 15)
+        preview_labels = [join_frame + offset for offset in offsets if join_frame + offset in labels]
         report["stage_previews"] = preview_sink(pixels, [labels[0] - 1, *labels], preview_labels)
         report["decoded_pixels_saved"] = True
     return report
@@ -1183,9 +1226,32 @@ class H3FlowLocalBoundaryAudit:
                     {
                         "default": False,
                         "tooltip": (
-                            "Save lossless PNG previews at join-1, join, join+5 and join+15 for each stage. "
+                            "Save PNG previews at join-1, join, +1, +2, +3, +5, +12 and +15 in full stage; "
+                            "other scopes retain four preview frames. "
                             "Uses existing decoded pixels, with no extra VAE calls. "
                             "Unavailable for high prediction tone."
+                        ),
+                    },
+                ),
+                "production_images": (
+                    "IMAGE",
+                    {
+                        "tooltip": (
+                            "Optional assembled full-timeline IMAGE (frame zero onward), e.g. the "
+                            "Continuum output before Save Video. Full stage only. Compare real preceding "
+                            "chunk pixels and final assembled RGB against matched-stage VAE decode; "
+                            "rejects mismatched frame count or geometry. Does not separate codec effects."
+                        ),
+                    },
+                ),
+                "decoder_context_crosscheck": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "Full stage only: add four independent seven-token same-time VAE decodes "
+                            "for source and final, contrasting prior and future decoder context. "
+                            "Standalone window pixels cannot be assembled into production output."
                         ),
                     },
                 ),
@@ -1224,6 +1290,8 @@ class H3FlowLocalBoundaryAudit:
         validate_full_video_decoder=False,
         feature_tracking_enabled=False,
         save_stage_previews=False,
+        production_images=None,
+        decoder_context_crosscheck=False,
     ):
         # Also cover execution with intermediate caching disabled (no IS_CHANGED).
         _AUDIT_MODEL_OWNERS.retain()
@@ -1241,6 +1309,8 @@ class H3FlowLocalBoundaryAudit:
             static_roi_json=static_roi_json,
             validate_full_video_decoder=validate_full_video_decoder,
             feature_tracking_enabled=feature_tracking_enabled,
+            production_images=production_images,
+            decoder_context_crosscheck=decoder_context_crosscheck,
             preview_sink=(
                 lambda pixels, labels, selected: _save_stage_previews(
                     folder_paths.get_output_directory(), pixels, labels, selected
