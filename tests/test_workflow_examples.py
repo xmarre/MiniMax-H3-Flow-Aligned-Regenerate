@@ -348,7 +348,7 @@ def test_native_source_continuation_examples_match_registered_schema_and_model_w
     assert node["widgets_values"] == [prompt["inputs"][name] for name in widget_names]
     assert set(schema["required"]) <= set(prompt["inputs"])
     assert set(prompt["inputs"]) <= set(schema["required"]) | set(schema["optional"])
-    assert prompt["inputs"]["source_prefix_projection"] == "native_source_carry"
+    assert prompt["inputs"]["source_prefix_projection"] == "native_source_carry_target_band"
 
 
 def test_native_source_output_prefix_is_distinct_and_matches_both_formats():

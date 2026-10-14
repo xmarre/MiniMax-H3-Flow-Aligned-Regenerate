@@ -97,7 +97,7 @@
       "audio_guided_overlap_mode": "sampler_mask_exact_timestep",
       "audio_guided_overlap_ticks": 16,
       "uniform_source_detail_transport": true,
-      "source_prefix_projection": "native_source_carry",
+      "source_prefix_projection": "native_source_carry_target_band",
       "capture_boundary_witness": false
     },
     "class_type": "H3NativeSourceContinuationHandoff",
