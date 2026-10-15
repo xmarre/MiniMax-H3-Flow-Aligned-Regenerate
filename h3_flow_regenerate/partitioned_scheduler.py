@@ -4282,6 +4282,7 @@ def run_partitioned_progressive(
             video_view=lambda video: target_band_source_view(video, target_band),
         )
     low_cfg_rows: list[dict[str, Any]] = []
+    low_reference_video = unpack_streams(low_latent_image, low_shapes)[0]
     low_latent_format = getattr(getattr(guider.model_patcher, "model", None), "latent_format", None)
     try:
         _reset_guider_conds(guider, template=conditioning_template)
@@ -4295,6 +4296,7 @@ def run_partitioned_progressive(
                     model_options,
                     low_shapes,
                     stage_plan.prefix_t,
+                    low_reference_video,
                     stage="low",
                     rows=low_cfg_rows,
                     latent_format=low_latent_format,
@@ -4350,6 +4352,7 @@ def run_partitioned_progressive(
                     model_options,
                     low_shapes,
                     stage_plan.prefix_t,
+                    low_reference_video,
                     stage="probe",
                     rows=low_cfg_rows,
                     latent_format=low_latent_format,

@@ -1760,6 +1760,14 @@ def test_signed_boundary_dc_receipts_attribute_the_seam_without_changing_output(
     assert cfg_receipt["status"] == "measured" and cfg_receipt["failed_evaluations"] == 0
     assert {row["stage"] for row in cfg_receipt["rows"]} == {"low", "probe"}
     assert all(row["tokens"] == [PROTECTED_T - 1, PROTECTED_T, PROTECTED_T + 1] for row in cfg_receipt["rows"])
+    assert cfg_receipt["uncond_evaluations"] == 0
+    probe = [row for row in cfg_receipt["rows"] if row["stage"] == "probe"][-1]
+    torch.testing.assert_close(
+        torch.tensor(probe["guided"]["anchored_step"]),
+        torch.tensor(receipts["source_low_native"]["boundary_step"]),
+        atol=1e-5,
+        rtol=0,
+    )
     assert "sampler_post_cfg_function" not in run.guider.model_options
 
     monkeypatch.setattr(scheduler, "measure_signed_boundary_dc", lambda *args, **kwargs: {})

@@ -3,14 +3,18 @@
 Diagnostic only. While the low and probe sampler lifetimes run, a
 ``sampler_post_cfg_function`` observer reduces the conditional, unconditional and
 guided clean predictions, and the sampler input, to per-channel spatial means of
-the last protected token and the first two generated tokens. It returns the
-guided prediction unchanged and retains no tensor.
+the last protected token ``p-1`` and the first two generated tokens. It returns
+the guided prediction unchanged and retains no tensor.
 
-This distinguishes a tone that the conditional branch selects against the
-protected context (prompt or conditioning driven, amplified by CFG) from one
-that both branches select (the context is not followed), and shows at which
-sigma the boundary step appears. Guiders that do not call ComfyUI's CFG
-function leave the receipt empty.
+Core's inpaint wrapper discards every prediction for the protected rows after
+CFG and returns the protected reference instead. The causal step of a branch is
+therefore its generated token ``p`` against that protected reference token
+``p-1`` (``anchored_step``), not against the branch's own discarded prediction
+of ``p-1``. The step within the prediction (``predicted_prefix_step``) is kept
+as a separate, discarded-branch diagnostic.
+
+The unconditional branch is reported only when the sampler evaluated it: with
+CFG scale 1, Core skips it and its accumulator is not a prediction.
 """
 
 from __future__ import annotations
@@ -24,12 +28,12 @@ import torch
 from .geometry import unpack_streams
 from .signed_boundary_dc import SIGNED_BOUNDARY_DC_POLICY, latent_preview_factors
 
-LOW_CFG_BRANCH_DC_POLICY = "low_cfg_branch_boundary_dc_v1"
+LOW_CFG_BRANCH_DC_POLICY = "low_cfg_branch_boundary_dc_v2"
 _BRANCHES = ("input", "cond", "uncond", "guided")
 _LUMA = (0.299, 0.587, 0.114)
 
 
-def _sigma(value: Any) -> float | None:
+def _scalar(value: Any) -> float | None:
     if torch.is_tensor(value):
         return float(value.detach().flatten()[0].item()) if value.numel() else None
     try:
@@ -38,19 +42,38 @@ def _sigma(value: Any) -> float | None:
         return None
 
 
+def _luma(means: torch.Tensor, factors: torch.Tensor | None) -> torch.Tensor | None:
+    if factors is None or tuple(factors.shape) != (int(means.shape[0]), 3):
+        return None
+    return (means.transpose(0, 1) @ factors) @ torch.tensor(_LUMA, dtype=torch.float32)
+
+
+def protected_reference_means(reference_video: torch.Tensor, prefix_t: int) -> torch.Tensor:
+    """Per-channel float32 spatial means of the protected token ``p-1`` of batch item 0, on the CPU."""
+
+    if not torch.is_tensor(reference_video) or reference_video.ndim != 5:
+        raise ValueError("low CFG branch DC requires a BxCxTxHxW protected reference")
+    if not 0 < int(prefix_t) <= int(reference_video.shape[2]):
+        raise ValueError("low CFG branch DC requires the protected boundary token")
+    with torch.no_grad():
+        return reference_video[0, :, int(prefix_t) - 1].mean(dim=(-2, -1), dtype=torch.float32).cpu()
+
+
 def measure_cfg_branch_dc(
     args: dict[str, Any],
     shapes: list[tuple[int, ...]],
     prefix_t: int,
+    reference: torch.Tensor,
     *,
     preview_factors: torch.Tensor | None = None,
 ) -> dict[str, Any]:
     """Reduce one CFG evaluation's branches to tokens ``p-1 .. p+1`` of batch item 0."""
 
+    uncond_evaluated = args.get("uncond") is not None and torch.is_tensor(args.get("uncond_denoised"))
     tensors = {
         "input": args.get("input"),
         "cond": args.get("cond_denoised"),
-        "uncond": args.get("uncond_denoised"),
+        "uncond": args.get("uncond_denoised") if uncond_evaluated else None,
         "guided": args.get("denoised"),
     }
     present = [name for name in _BRANCHES if torch.is_tensor(tensors[name])]
@@ -63,27 +86,32 @@ def measure_cfg_branch_dc(
                 raise ValueError("low CFG branch DC requires the boundary tokens")
             reductions.append(video[0, :, start:stop].mean(dim=(-2, -1), dtype=torch.float32))
         table = torch.stack(reductions).cpu() if reductions else None
-    luma = torch.tensor(_LUMA, dtype=torch.float32)
+    reference = reference.to(torch.float32)
+    reference_luma = _luma(reference.view(-1, 1), preview_factors)
     row: dict[str, Any] = {
-        "sigma": _sigma(args.get("sigma")),
-        "cond_scale": _sigma(args.get("cond_scale")),
+        "sigma": _scalar(args.get("sigma")),
+        "cond_scale": _scalar(args.get("cond_scale")),
         "tokens": list(range(start, stop)),
+        "uncond_evaluated": uncond_evaluated,
     }
     for name in _BRANCHES:
         if name not in present:
             row[name] = None
             continue
         means = table[present.index(name)]
-        step = means[:, 1] - means[:, 0]
+        anchored = means[:, 1] - reference
+        predicted = means[:, 1] - means[:, 0]
         entry = {
             "channel_means": [[float(v) for v in means[:, k].tolist()] for k in range(stop - start)],
-            "boundary_step": [float(v) for v in step.tolist()],
-            "boundary_step_rms": float(step.square().mean().sqrt().item()),
+            "anchored_step": [float(v) for v in anchored.tolist()],
+            "anchored_step_rms": float(anchored.square().mean().sqrt().item()),
+            "predicted_prefix_step_rms": float(predicted.square().mean().sqrt().item()),
         }
-        if preview_factors is not None and tuple(preview_factors.shape) == (int(means.shape[0]), 3):
-            preview = (means.transpose(0, 1) @ preview_factors) @ luma
-            entry["preview_luma"] = [float(v) for v in preview.tolist()]
-            entry["preview_luma_boundary_step"] = float(preview[1] - preview[0])
+        luma = _luma(means, preview_factors)
+        if luma is not None and reference_luma is not None:
+            entry["preview_luma"] = [float(v) for v in luma.tolist()]
+            entry["preview_luma_anchored_step"] = float(luma[1] - reference_luma[0])
+            entry["preview_luma_predicted_prefix_step"] = float(luma[1] - luma[0])
         row[name] = entry
     return row
 
@@ -93,20 +121,32 @@ def capture_low_cfg_branch_dc(
     model_options: dict[str, Any],
     shapes: list[tuple[int, ...]],
     prefix_t: int,
+    reference_video: torch.Tensor,
     *,
     stage: str,
     rows: list[dict[str, Any]],
     latent_format: Any = None,
 ):
-    """Observe every CFG evaluation in this block; the guided prediction is returned unchanged."""
+    """Observe every CFG evaluation in this block; the guided prediction is returned unchanged.
+
+    ``reference_video`` is the sampler's ``latent_image`` video, whose protected
+    rows Core's inpaint wrapper returns in place of every prediction.
+    """
 
     previous = model_options.get("sampler_post_cfg_function")
     factors = latent_preview_factors(latent_format, int(shapes[0][1]))
+    try:
+        reference = protected_reference_means(reference_video, prefix_t)
+        reference_error = None
+    except Exception as exc:  # diagnostics must never stop sampling
+        reference, reference_error = None, repr(exc)
 
     def observe(args):
         started = time.perf_counter()
         try:
-            row = measure_cfg_branch_dc(args, shapes, prefix_t, preview_factors=factors)
+            if reference is None:
+                raise RuntimeError(f"protected reference unavailable: {reference_error}")
+            row = measure_cfg_branch_dc(args, shapes, prefix_t, reference, preview_factors=factors)
             row["status"] = "measured"
         except Exception as exc:  # diagnostics must never stop sampling
             row = {"status": "error", "error": repr(exc)}
@@ -130,35 +170,28 @@ def low_cfg_branch_dc_receipt(rows: list[dict[str, Any]]) -> dict[str, Any]:
     measured = [row for row in rows if row.get("status") == "measured"]
     summary = {}
     for name in _BRANCHES:
-        steps = [
-            (row["stage"], row["sigma"], row[name].get("preview_luma_boundary_step"), row[name]["boundary_step_rms"])
-            for row in measured
-            if row.get(name) is not None
-        ]
+        entries = [(row, row[name]) for row in measured if row.get(name) is not None]
         summary[name] = (
             {
-                "first": {
-                    "stage": steps[0][0],
-                    "sigma": steps[0][1],
-                    "preview_luma_step": steps[0][2],
-                    "rms": steps[0][3],
-                },
-                "last": {
-                    "stage": steps[-1][0],
-                    "sigma": steps[-1][1],
-                    "preview_luma_step": steps[-1][2],
-                    "rms": steps[-1][3],
-                },
+                position: {
+                    "stage": row["stage"],
+                    "sigma": row["sigma"],
+                    "anchored_step_rms": entry["anchored_step_rms"],
+                    "preview_luma_anchored_step": entry.get("preview_luma_anchored_step"),
+                }
+                for position, (row, entry) in (("first", entries[0]), ("last", entries[-1]))
             }
-            if steps
+            if entries
             else None
         )
     return {
         "policy": LOW_CFG_BRANCH_DC_POLICY,
         "boundary_dc_policy": SIGNED_BOUNDARY_DC_POLICY,
         "status": "measured" if measured else ("not_observed" if not rows else "error"),
+        "protected_reference": "sampler_latent_image_protected_token",
         "evaluations": len(rows),
         "failed_evaluations": len(rows) - len(measured),
+        "uncond_evaluations": sum(1 for row in measured if row.get("uncond_evaluated")),
         "summary": summary,
         "rows": rows,
         "output_mutated": False,
@@ -172,4 +205,5 @@ __all__ = [
     "capture_low_cfg_branch_dc",
     "low_cfg_branch_dc_receipt",
     "measure_cfg_branch_dc",
+    "protected_reference_means",
 ]

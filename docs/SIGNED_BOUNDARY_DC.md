@@ -81,17 +81,29 @@ every evaluation, four tensors to per-channel spatial means of tokens
 - the unconditional clean prediction;
 - the guided prediction.
 
-Each is reported with its boundary step and preview luma, and with the sigma and
-CFG scale. The predictions are the model's own, before the protected rows are
-restored, so token `p-1` shows how the model reads the protected context.
+Each row also records the sigma and the CFG scale. For each branch:
 
-- A step in the conditional prediction that the unconditional one lacks is selected by the prompt or conditioning and amplified by CFG.
-- A step in both is not explained by guidance; the generated tokens do not follow the context's tone in either branch.
-- The first evaluation, at the highest sigma, shows whether the step is decided before any generated content exists.
+- **`anchored_step`.** The branch's generated token `p` minus the protected reference token `p-1`. The reference is the sampler's `latent_image`, which Core's inpaint wrapper returns in place of every prediction for the protected rows. This is the step the branch would emit. For the guided branch of the last probe evaluation, it equals the `source_low_native` boundary step.
+- **`predicted_prefix_step`.** The step against the branch's own prediction of `p-1`. That prediction is discarded by the inpaint wrapper; it is reported only as a measure of how the model reads the protected context.
+- **Preview luma.** Each step is also given in linear preview luma.
 
-With CFG scale 1, the unconditional branch is absent. Guiders that do not call
-ComfyUI's CFG function record `not_observed`. The guided prediction is returned
-unchanged, and an observer failure is recorded as an error row.
+The unconditional branch is reported only when the sampler evaluated it. At CFG
+scale 1 Core skips it unless `disable_cfg1_optimization` is set, and the row
+records `uncond_evaluated: false`.
+
+How to read the branches:
+
+- **Conditional only.** A step the conditional branch has and the unconditional one lacks depends on what differs between the two conditionings, usually the prompt, and CFG amplifies it.
+- **Both branches.** A step in both does not depend on that difference. It can come from the protected context, or from conditioning both branches share, such as keyframes or references.
+- **First evaluation.** The first evaluation, at the highest sigma, shows whether the step is decided before any generated content exists.
+
+These are hypotheses for a controlled comparison, not conclusions: the receipt
+does not vary any input.
+
+Guiders that do not call ComfyUI's CFG function record `not_observed`. The guided
+prediction is returned unchanged, and an observer failure is recorded as an
+error row. Each evaluation adds one host transfer of a small table, and records
+its own `elapsed_ms`.
 
 ## Cost and failure behaviour
 
