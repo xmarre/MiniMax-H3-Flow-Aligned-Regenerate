@@ -213,6 +213,7 @@ from .seam_diagnostics import (
     recover_conditional_clean_for_diagnostics,
 )
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
+from .signed_boundary_dc import latent_preview_factors, measure_signed_boundary_dc, signed_boundary_dc_ledger
 from .source_prefix_carry import (
     SOURCE_PREFIX_CARRY_POLICY,
     reconcile_target_band,
@@ -4833,6 +4834,20 @@ def run_partitioned_progressive(
             clean_video[:, :, : stage_plan.prefix_t] = exact_prefix_source
             source_x0 = pack_streams((clean_video, clean_audio))[0]
 
+        signed_dc_receipts: dict[str, dict[str, Any]] = {}
+
+        def record_signed_dc(stage: str, video: torch.Tensor, domain: str) -> None:
+            receipt = measure_signed_boundary_dc(
+                video,
+                stage_plan.prefix_t,
+                preview_factors=latent_preview_factors(getattr(base_model, "latent_format", None), video.shape[1]),
+            )
+            receipt.update(stage=stage, domain=domain)
+            signed_dc_receipts[stage] = receipt
+            binding.metrics.event("partitioned_signed_boundary_dc", **receipt)
+
+        record_signed_dc("source_low_exact_context", clean_video, "model_internal_clean")
+
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             source_exact_trajectory = measure_translation_trajectory(
                 clean_video,
@@ -5456,6 +5471,7 @@ def run_partitioned_progressive(
 
         if provider_native_clean is None:
             raise RuntimeError("partitioned provider-native clean witness was not established")
+        record_signed_dc("provider_native", provider_native_clean, "model_internal_clean")
         exact_overlap_policy = PARTITIONED_EXACT_OVERLAP_POLICY
         binding.metrics.event(
             "partitioned_provider_boundary_stabilization",
@@ -5706,6 +5722,7 @@ def run_partitioned_progressive(
 
         restored_clean = corrected_clean.clone()
         restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
+        record_signed_dc("pre_high_exact_restored", restored_clean, "model_internal_clean")
 
         if boundary_window_evidence is not None and uniform_source:
             boundary_window_evidence.capture("provider_native_clean", provider_native_clean)
@@ -7031,6 +7048,8 @@ def run_partitioned_progressive(
                 high_stage_audio_mask_unchanged=True,
             )
         boundary = measure_video_boundary(final_video, stage_plan.prefix_t)
+        record_signed_dc("final", final_video, "caller_output_latent")
+        binding.metrics.event("partitioned_signed_boundary_dc_ledger", **signed_boundary_dc_ledger(signed_dc_receipts))
         if target_band is not None:
             _emit_target_band_tail_boundary(
                 binding.metrics,

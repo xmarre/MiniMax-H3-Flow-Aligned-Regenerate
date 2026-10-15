@@ -1705,3 +1705,32 @@ def test_uniform_coupled_entry_retains_measured_residual_without_frame_gauge(mon
     original, _ = unpack_streams(run.latent_image, run.shapes)
     assert torch.equal(video[:, :, :PROTECTED_T], original[:, :, :PROTECTED_T])
     assert run.binding.active_capture is None
+
+
+def test_signed_boundary_dc_receipts_attribute_the_seam_without_changing_output(monkeypatch):
+    import h3_flow_regenerate.partitioned_scheduler as scheduler
+    from h3_flow_regenerate.signed_boundary_dc import SIGNED_BOUNDARY_DC_STAGES
+
+    run = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE)
+    receipts = {event["stage"]: event for event in _events(run.metrics, "partitioned_signed_boundary_dc")}
+    assert tuple(receipts) == SIGNED_BOUNDARY_DC_STAGES
+    assert receipts["source_low_exact_context"]["grid_hw"] == list(SOURCE_HW)
+    assert receipts["final"]["grid_hw"] == list(TARGET_HW)
+    transfer = _events(run.metrics, "partitioned_transfer")[0]
+    complete = _events(run.metrics, "partitioned_exact_prefix_complete")[0]
+    for stage, expected in (
+        ("provider_native", transfer["upscaler_native_seam_spatial_mean_rms"]),
+        ("pre_high_exact_restored", transfer["corrected_exact_seam_spatial_mean_rms"]),
+        ("final", complete["final_seam_spatial_mean_rms"]),
+    ):
+        assert receipts[stage]["boundary_step_rms"] == pytest.approx(expected, rel=1e-4, abs=1e-6)
+    (ledger,) = _events(run.metrics, "partitioned_signed_boundary_dc_ledger")
+    assert ledger["status"] == "complete"
+    total = sum(row["signed_contribution_to_final_norm"] for row in ledger["components"].values())
+    assert total == pytest.approx(ledger["final_step_norm"], rel=1e-5, abs=1e-7)
+
+    monkeypatch.setattr(scheduler, "measure_signed_boundary_dc", lambda *args, **kwargs: {})
+    monkeypatch.setattr(scheduler, "signed_boundary_dc_ledger", lambda receipts: {})
+    control = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE)
+    assert torch.equal(control.result, run.result)
+    assert [call["stage"] for call in control.calls] == [call["stage"] for call in run.calls]
