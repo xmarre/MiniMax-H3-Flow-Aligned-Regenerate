@@ -595,6 +595,23 @@ def flow_predict_wrapper(executor, x, timestep, model_options=None, seed=None):
         boundary_trace.observe(
             result, point="before_flow", call_index=boundary_call_index, sigma=sigma, actual=actual, sampler_input=x
         )
+        from .first_high_counterfactual import maybe_run_first_high_counterfactual
+        from .partitioned_stage import PARTITIONED_STAGE_KEY
+
+        maybe_run_first_high_counterfactual(
+            guider,
+            x,
+            timestep,
+            model_options,
+            seed,
+            production=result,
+            trace=boundary_trace,
+            call_index=boundary_call_index,
+            sigma=sigma,
+            actual=actual,
+            metrics=binding.metrics,
+            stage_key=PARTITIONED_STAGE_KEY,
+        )
 
     if binding.guidance is not None and binding.guidance.mode != "off":
         run = binding.active_guidance_run
