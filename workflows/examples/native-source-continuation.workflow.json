@@ -334,7 +334,8 @@
         16,
         true,
         "native_source_carry_target_band",
-        false
+        false,
+        "off"
       ],
       "title": "MiniMax H3 Native Source Continuation"
     },
