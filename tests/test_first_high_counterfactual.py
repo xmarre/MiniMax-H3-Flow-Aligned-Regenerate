@@ -1,23 +1,21 @@
-import json
 from types import SimpleNamespace
 
 import pytest
 import torch
 
-import h3_flow_regenerate.local_boundary_audit as local_audit
+import h3_flow_regenerate.first_high_counterfactual as counterfactual
 from h3_flow_regenerate.first_high_counterfactual import (
     FIRST_HIGH_COUNTERFACTUAL_ARMS,
     FIRST_HIGH_COUNTERFACTUAL_KEY,
     FirstHighCounterfactualRequest,
     H3FirstHighCounterfactual,
     arm_tensor_name,
-    audit_first_high_counterfactual,
     maybe_run_first_high_counterfactual,
 )
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.metrics import H3FlowMetrics
 from h3_flow_regenerate.partitioned_stage import PARTITIONED_STAGE_KEY, PartitionedStagePlan, PartitionedStageRuntime
-from h3_flow_regenerate.residual_evidence import BoundaryWindowEvidence, _write_exact_tensor
+from h3_flow_regenerate.residual_evidence import BoundaryWindowEvidence
 
 PREFIX_T, TEMPORAL, H, W = 12, 22, 4, 6
 SPECTRUM_KEYS = {"spectrum_h3_runtime": object(), "spectrum_h3_run_id": 3, "spectrum_h3_step_id": 7}
@@ -146,6 +144,11 @@ def test_each_arm_changes_only_its_operand_and_is_isolated():
     assert receipt["pdd_heads"]["video_head_bank_count"] == 2
     assert receipt["high_entry_ledger"]["implied_noise_std"] == pytest.approx(1.0, abs=0.05)
     assert receipt["sample_sigmas"] == pytest.approx([case.sigma, 0.5])
+    assert receipt["status"] == "captured"
+    assert set(receipt["latent_boundary_trajectories"]) == {"pre_high", "production"}
+    for row in receipt["arms"]:
+        assert set(row["latent_boundary_trajectories"]) == {"upper45", "full"}
+        assert len(row["latent_boundary_trajectories"]["full"]["pairwise_dx"]) == 5
     assert [e.kind for e in case.metrics.events] == ["partitioned_first_high_counterfactual"]
     _run(case)
     assert len(case.guider.calls) == 4
@@ -187,47 +190,26 @@ def test_failed_arm_is_recorded_and_others_complete():
     assert all(rows[arm]["status"] == "ok" for arm in ("replay", "provider_prefix", "suffix_noise_reseed"))
 
 
-def test_node_publishes_selected_arms_on_a_clone():
+def test_insufficient_device_headroom_skips_every_arm(monkeypatch):
+    case = _setup()
+    monkeypatch.setattr(counterfactual, "_free_device_bytes", lambda device: 0)
+    _run(case)
+    receipt = case.evidence.plan["first_high_counterfactual"]
+    assert case.guider.calls == []
+    assert receipt["status"] == "skipped_insufficient_headroom" and receipt["extra_h3_predictions"] == 0
+    assert not any(name.startswith("first_high_counterfactual_") for name in case.evidence.tensors)
+
+
+def test_node_is_off_by_default_and_publishes_selected_arms_on_a_clone():
     model = SimpleNamespace(model_options={})
     model.clone = lambda: SimpleNamespace(model_options=dict(model.model_options))
+    spec = H3FirstHighCounterfactual.INPUT_TYPES()["required"]
+    assert all(spec[arm][1]["default"] is False for arm in FIRST_HIGH_COUNTERFACTUAL_ARMS)
+    (unchanged,) = H3FirstHighCounterfactual().patch(model, False, False, False, False, 9)
+    assert unchanged is model and FIRST_HIGH_COUNTERFACTUAL_KEY not in model.model_options
     (patched,) = H3FirstHighCounterfactual().patch(model, True, False, True, True, 9)
     assert FIRST_HIGH_COUNTERFACTUAL_KEY not in model.model_options
     request = patched.model_options[FIRST_HIGH_COUNTERFACTUAL_KEY]
     assert request.arms == ("replay", "suffix_noise_reseed", "native_high_attention")
     with pytest.raises(ValueError):
         FirstHighCounterfactualRequest(("unknown",), 0)
-
-
-class WindowVAE:
-    def __init__(self):
-        self.first_stage_model = SimpleNamespace(
-            tokens_chunk_size=5, token_overlap=2, frame_pre_padding=3, clip_length=17
-        )
-        self.inputs = []
-
-    def decode(self, value):
-        self.inputs.append(value.clone())
-        return torch.full((1, 22, value.shape[-2] * 16, value.shape[-1] * 16, 3), 0.5)
-
-
-def test_audit_decodes_every_arm_with_exact_context_and_labels_join(tmp_path, monkeypatch):
-    case = _setup()
-    _run(case)
-    entries = {name: _write_exact_tensor(tmp_path / f"{name}.bin", t) for name, t in case.evidence.tensors.items()}
-    manifest = {"metadata": {"window": case.evidence.plan}, "tensor_bytes": entries}
-    (tmp_path / "manifest.json").write_text(json.dumps(manifest, default=float))
-    seen = []
-    monkeypatch.setattr(local_audit, "geometry_comparison", lambda a, b, labels: seen.append(labels) or {})
-    vae = WindowVAE()
-    report = audit_first_high_counterfactual(vae, str(tmp_path), 175, lambda x: x)
-    names = ["pre_high", "production_first_high", *FIRST_HIGH_COUNTERFACTUAL_ARMS]
-    names.insert(names.index("provider_prefix") + 1, "provider_prefix_with_provider_context")
-    assert list(report["stages"]) == names
-    assert report["extra_vae_calls"] == len(vae.inputs) == len(names)
-    assert report["frame_labels"] == list(range(173, 181))
-    assert all(labels == list(range(173, 181)) for labels in seen)
-    exact_window = case.exact[:, :, 10:12]
-    for name, latent in zip(names, vae.inputs, strict=True):
-        context = case.provider[:, :, 10:12] if name == "provider_prefix_with_provider_context" else exact_window
-        assert torch.equal(latent[:, :, :2], context)
-    assert torch.equal(vae.inputs[1][:, :, 2:], case.evidence.tensors["first_high_before_flow"][:, :, 2:])

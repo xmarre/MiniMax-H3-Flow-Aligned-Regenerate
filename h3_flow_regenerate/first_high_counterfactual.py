@@ -5,9 +5,11 @@ or model-stack change per arm. Each arm calls the guider's unwrapped CFG
 prediction, so predict-noise wrappers (Spectrum step accounting, Flow guidance
 and boundary traces) never observe it. Spectrum's per-step diffusion-model keys
 are removed, the partitioned stage runtime is replaced by a copy with scratch
-metrics, and caller RNG state is restored afterwards. Arm outputs are kept as
-the native seven-token boundary decoder window and exported with the boundary
-evidence bundle. The production prediction is returned unchanged.
+metrics, and caller RNG state is restored afterwards. The receipt reports
+latent-domain boundary trajectories for every arm, computed on CPU from the
+native seven-token boundary decoder windows, which are also exported with the
+boundary evidence bundle. No VAE is loaded. The production prediction is
+returned unchanged.
 
 Each arm costs one extra H3 evaluation (two with CFG) at target resolution.
 Arms are causal tests of the first prediction, not a repair.
@@ -16,15 +18,14 @@ Arms are causal tests of the first prediction, not a repair.
 from __future__ import annotations
 
 import dataclasses
-import json
 import time
-from pathlib import Path
 from typing import Any
 
 import torch
 
 from .geometry import pack_streams, unpack_streams
 from .metrics import H3FlowMetrics
+from .seam_diagnostics import measure_translation_trajectory
 
 FIRST_HIGH_COUNTERFACTUAL_KEY = "h3_flow_first_high_counterfactual_v1"
 FIRST_HIGH_COUNTERFACTUAL_POLICY = "first_high_counterfactual_v1"
@@ -36,8 +37,10 @@ FIRST_HIGH_COUNTERFACTUAL_ARMS = (
 )
 SPECTRUM_DIFFUSION_STEP_KEYS = ("spectrum_h3_runtime", "spectrum_h3_run_id", "spectrum_h3_step_id")
 VISUAL_COND_TIMESTEP = 0.999
-WINDOW_TOKENS = 7
 WINDOW_CONTEXT_TOKENS = 2
+# Per-arm device tensors beyond the production call's reused workspace: the
+# cloned video, the packed arm input, the prediction and its unpacked view.
+HEADROOM_STATE_MULTIPLE = 4
 
 
 def arm_tensor_name(arm: str) -> str:
@@ -101,6 +104,31 @@ def _pdd_head_receipt(guider) -> dict[str, Any]:
     }
 
 
+def _latent_boundary_trajectories(window, exact_context):
+    """Latent-cell motion across the window's prefix/suffix boundary (token level, not decoded frames)."""
+    video = window.float().clone()
+    video[:, :, :WINDOW_CONTEXT_TOKENS] = exact_context.float()
+    return {
+        name: measure_translation_trajectory(
+            video,
+            WINDOW_CONTEXT_TOKENS,
+            forward_steps=int(video.shape[2]) - WINDOW_CONTEXT_TOKENS,
+            backward_steps=1,
+            roi_fraction=fraction,
+            max_shift=4,
+        )
+        for name, fraction in (("upper45", 0.45), ("full", 1.0))
+    }
+
+
+def _free_device_bytes(device) -> int | None:
+    if device.type != "cuda":
+        return None
+    import comfy.model_management as model_management
+
+    return int(model_management.get_free_memory(device))
+
+
 def _noise_ledger(x_suffix, pre_suffix, sigma, noise_scale):
     signal = (1.0 - sigma) * pre_suffix
     implied = (x_suffix - signal) / (sigma * noise_scale)
@@ -162,6 +190,7 @@ def maybe_run_first_high_counterfactual(
     prefix_t = int(plan["prefix_t"])
     start, stop = int(plan["window_start_t"]), int(plan["window_stop_t"])
     exact = evidence.tensors["authoritative_prefix_full"]
+    exact_window = evidence.tensors["authoritative_prefix"]
     provider = evidence.tensors["provider_native_clean_full"]
     pre_high = evidence.tensors["pre_high_exact_restored_full"]
     production_video = unpack_streams(production, shapes)[0]
@@ -185,6 +214,14 @@ def maybe_run_first_high_counterfactual(
         "pdd_heads": _pdd_head_receipt(guider),
         "arms": [],
     }
+    required = HEADROOM_STATE_MULTIPLE * x.numel() * x.element_size()
+    free = _free_device_bytes(device)
+    receipt["device_headroom"] = {"required_bytes_estimate": required, "free_bytes": free}
+    if free is not None and free < required:
+        receipt.update(status="skipped_insufficient_headroom", extra_h3_predictions=0)
+        plan["first_high_counterfactual"] = receipt
+        metrics.event("partitioned_first_high_counterfactual", **receipt)
+        return
     pre_suffix = pre_high[:, :, prefix_t:].to(device=device, dtype=dtype)
     _implied, receipt["high_entry_ledger"] = _noise_ledger(x_video[:, :, prefix_t:], pre_suffix, sigma, noise_scale)
     del _implied
@@ -233,22 +270,30 @@ def maybe_run_first_high_counterfactual(
                 tensor=name,
                 bitwise_equal_to_production=bool(torch.equal(arm_video, production_reference)),
                 window_difference_from_production_rms_per_token=_token_rms(difference),
+                latent_boundary_trajectories=_latent_boundary_trajectories(window, exact_window),
                 elapsed_ms=(time.perf_counter() - arm_started) * 1000.0,
             )
             receipt["arms"].append(row)
             del output, arm_video, arm_x, video
     if not torch.equal(production_video, production_reference):
         raise RuntimeError("first-high counterfactual changed the production prediction")
+    del pre_suffix
+    receipt["latent_boundary_trajectories"] = {
+        stage: _latent_boundary_trajectories(evidence.tensors[name], exact_window)
+        for stage, name in (("pre_high", "pre_high_exact_restored"), ("production", "first_high_before_flow"))
+    }
+    receipt["latent_trajectory_units"] = "latent_cells_per_token_not_decoded_frames"
+    receipt["status"] = "captured"
     receipt["elapsed_ms"] = (time.perf_counter() - started) * 1000.0
     receipt["extra_h3_predictions"] = sum(row["status"] == "ok" for row in receipt["arms"])
     plan["first_high_counterfactual"] = receipt
-    metrics.event("partitioned_first_high_counterfactual", status="captured", **receipt)
+    metrics.event("partitioned_first_high_counterfactual", **receipt)
 
 
 class H3FirstHighCounterfactual:
     @classmethod
     def INPUT_TYPES(cls):
-        arm = {"default": True}
+        arm = {"default": False}
         return {
             "required": {
                 "model": ("MODEL",),
@@ -278,8 +323,9 @@ class H3FirstHighCounterfactual:
     CATEGORY = "MiniMax H3/diagnostics"
     DESCRIPTION = (
         "Diagnostic only. At the first actual target-high prediction of a continuation, repeat the prediction once "
-        "per selected arm and save each result in the boundary evidence bundle. Requires capture_boundary_witness. "
-        "Each arm adds one H3 evaluation per CFG branch; generated output is unchanged."
+        "per selected arm and report latent boundary trajectories in the metrics receipt; no VAE is loaded. "
+        "Requires capture_boundary_witness. Every arm is off by default. Each selected arm adds one H3 evaluation "
+        "per CFG branch, and arms are skipped when device headroom is insufficient. Generated output is unchanged."
     )
 
     def patch(self, model, replay, provider_prefix, suffix_noise_reseed, native_high_attention, noise_seed):
@@ -289,143 +335,17 @@ class H3FirstHighCounterfactual:
             suffix_noise_reseed=suffix_noise_reseed,
             native_high_attention=native_high_attention,
         )
-        request = FirstHighCounterfactualRequest(
-            arms=tuple(arm for arm in FIRST_HIGH_COUNTERFACTUAL_ARMS if selected[arm]), noise_seed=int(noise_seed)
-        )
+        arms = tuple(arm for arm in FIRST_HIGH_COUNTERFACTUAL_ARMS if selected[arm])
+        if not arms:
+            return (model,)
+        request = FirstHighCounterfactualRequest(arms=arms, noise_seed=int(noise_seed))
         patched = model.clone()
         patched.model_options[FIRST_HIGH_COUNTERFACTUAL_KEY] = request
         return (patched,)
 
 
-def audit_first_high_counterfactual(vae, bundle_path, join_frame, process_out):
-    """Decode every saved arm window and measure adjacent-frame displacement at the join."""
-
-    import os
-
-    from .local_boundary_audit import (
-        _decode_owned_pixels,
-        geometry_comparison,
-        normalize_bundle_path,
-        read_verified_operand,
-    )
-
-    native = getattr(vae, "first_stage_model", None)
-    expected = {"tokens_chunk_size": 5, "token_overlap": 2, "frame_pre_padding": 3, "clip_length": 17}
-    if native is None or any(getattr(native, key, None) != value for key, value in expected.items()):
-        raise ValueError("connect the native MiniMax H3 video VAE used for production decoding")
-    if type(join_frame) is not int or join_frame < 0:
-        raise ValueError("chunk_join_frame must be a non-negative integer")
-    path = Path(normalize_bundle_path(bundle_path, platform=os.name, wsl_distro=os.environ.get("WSL_DISTRO_NAME")))
-    directory = path.expanduser().resolve()
-    if directory.name == "manifest.json":
-        directory = directory.parent
-    manifest = json.loads((directory / "manifest.json").read_bytes())
-    window = manifest.get("metadata", {}).get("window", {})
-    receipt = window.get("first_high_counterfactual")
-    if not isinstance(receipt, dict) or receipt.get("policy") != FIRST_HIGH_COUNTERFACTUAL_POLICY:
-        raise ValueError("this bundle has no first-high counterfactual capture")
-    if (window.get("window_stop_t", 0) - window.get("window_start_t", 0)) != WINDOW_TOKENS:
-        raise ValueError("first-high counterfactual windows differ from native boundary timing")
-    entries = manifest["tensor_bytes"]
-    hashes: dict[str, str] = {}
-
-    def read(name):
-        return read_verified_operand(directory, entries, name, hashes)
-
-    exact_context = read("authoritative_prefix")
-    provider_context = read("provider_native_clean")[:, :, :WINDOW_CONTEXT_TOKENS]
-    latents = {"pre_high": read("pre_high_exact_restored"), "production_first_high": read("first_high_before_flow")}
-    for row in receipt["arms"]:
-        if row.get("status") == "ok":
-            latents[row["arm"]] = read(row["tensor"])
-            if row["arm"] == "provider_prefix":
-                latents["provider_prefix_with_provider_context"] = latents["provider_prefix"]
-    # Local frame 5 of a native seven-token window decode is the first frame of
-    # the first generated token, i.e. the assembled join frame.
-    labels = [join_frame - 5 + i for i in range(17)]
-    measured = slice(2, 11)
-    report = {
-        "policy": "first_high_counterfactual_audit_v1",
-        "join_frame": join_frame,
-        "capture": receipt,
-        "operand_sha256": hashes,
-        "decoder": "standalone_native_seven_token_window",
-        "context_tokens": "authoritative_prefix_except_provider_context_arm",
-        "frame_labels": labels[measured][1:],
-        "sign_convention": "sample candidate at (x-dx,y-dy) to compare with reference",
-        "extra_vae_calls": 0,
-        "stages": {},
-    }
-    pixels = {}
-    for name, latent in latents.items():
-        latent = latent.clone()
-        latent[:, :, :WINDOW_CONTEXT_TOKENS] = (
-            provider_context if name == "provider_prefix_with_provider_context" else exact_context
-        )
-        frames = _decode_owned_pixels(vae, latent, process_out, 22)[0, :17].detach().float().cpu()
-        report["extra_vae_calls"] += 1
-        frames = frames[measured]
-        pixels[name] = frames
-        upper = frames[:, : round(frames.shape[1] * 0.45)]
-        report["stages"][name] = {
-            "adjacent_frame_geometry": geometry_comparison(frames[:-1], frames[1:], labels[measured][1:]),
-            "adjacent_frame_geometry_upper45": geometry_comparison(upper[:-1], upper[1:], labels[measured][1:]),
-            "adjacent_rgb_difference_rms": (frames[1:] - frames[:-1]).square().mean((1, 2, 3)).sqrt().tolist(),
-        }
-    for name, frames in pixels.items():
-        if name != "production_first_high":
-            report["stages"][name]["same_frame_rgb_difference_from_production_rms"] = (
-                (frames[1:] - pixels["production_first_high"][1:]).square().mean((1, 2, 3)).sqrt().tolist()
-            )
-    return report
-
-
-class H3FirstHighCounterfactualAudit:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "video_vae": ("VAE",),
-                "bundle_path": ("STRING", {"default": "", "tooltip": "Boundary bundle directory or manifest.json."}),
-                "chunk_join_frame": ("INT", {"default": 0, "min": 0, "max": 10000000}),
-            }
-        }
-
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("numerical_report",)
-    FUNCTION = "audit"
-    CATEGORY = "MiniMax H3/diagnostics"
-    OUTPUT_NODE = True
-    DESCRIPTION = (
-        "Decode the first-high counterfactual arms saved in a boundary bundle with the production video VAE and "
-        "report adjacent-frame displacement around the chunk join for each arm, pre-high and the production "
-        "first prediction. Saves the numerical report as JSON in the output directory."
-    )
-
-    @classmethod
-    def IS_CHANGED(cls, **_kwargs):
-        return float("nan")
-
-    def audit(self, video_vae, bundle_path, chunk_join_frame):
-        import folder_paths
-        from comfy.latent_formats import MiniMaxH3Video
-
-        report = audit_first_high_counterfactual(video_vae, bundle_path, chunk_join_frame, MiniMaxH3Video().process_out)
-        text = json.dumps(report, indent=2, sort_keys=True, allow_nan=False)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        output = Path(folder_paths.get_output_directory()) / f"first-high-counterfactual-{stamp}.json"
-        output.write_text(text)
-        return {"ui": {"text": [text]}, "result": (text,)}
-
-
-NODE_CLASS_MAPPINGS = {
-    "H3FirstHighCounterfactual": H3FirstHighCounterfactual,
-    "H3FirstHighCounterfactualAudit": H3FirstHighCounterfactualAudit,
-}
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "H3FirstHighCounterfactual": "MiniMax H3 First-High Counterfactual [Diagnostic]",
-    "H3FirstHighCounterfactualAudit": "MiniMax H3 First-High Counterfactual Audit",
-}
+NODE_CLASS_MAPPINGS = {"H3FirstHighCounterfactual": H3FirstHighCounterfactual}
+NODE_DISPLAY_NAME_MAPPINGS = {"H3FirstHighCounterfactual": "MiniMax H3 First-High Counterfactual [Diagnostic]"}
 
 __all__ = [
     "FIRST_HIGH_COUNTERFACTUAL_ARMS",
@@ -435,8 +355,6 @@ __all__ = [
     "NODE_DISPLAY_NAME_MAPPINGS",
     "FirstHighCounterfactualRequest",
     "H3FirstHighCounterfactual",
-    "H3FirstHighCounterfactualAudit",
     "arm_tensor_name",
-    "audit_first_high_counterfactual",
     "maybe_run_first_high_counterfactual",
 ]
