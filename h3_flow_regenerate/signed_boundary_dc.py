@@ -176,6 +176,8 @@ def signed_boundary_dc_ledger(receipts: dict[str, dict[str, Any]]) -> dict[str, 
     previous_step = torch.zeros_like(final)
     previous_luma = 0.0
     for (stage, change), step, luma in zip(order, steps, lumas, strict=True):
+        if stage == "source_low_exact_context" and receipts[stage].get("shadow_clean_selected"):
+            change = "source_prefix_write_and_shadow_clean_selection"
         vector = step - previous_step
         norm = float(vector.norm().item())
         components[change] = {

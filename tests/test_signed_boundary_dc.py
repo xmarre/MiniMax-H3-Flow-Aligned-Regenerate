@@ -136,6 +136,13 @@ def test_optional_boundary_pair_stage_and_failed_or_missing_stages():
     assert ledger["status"] == "complete" and "provider_boundary_pair_replacement" not in ledger["components"]
     replaced = signed_boundary_dc_ledger({**receipts, "provider_boundary_pair_replaced": receipt})
     assert replaced["stages"][3] == "provider_boundary_pair_replaced"
+    shadow = signed_boundary_dc_ledger(
+        {**receipts, "source_low_exact_context": {**receipt, "shadow_clean_selected": True}}
+    )
+    assert "source_prefix_write" not in shadow["components"]
+    assert shadow["components"]["source_prefix_write_and_shadow_clean_selection"]["stage"] == (
+        "source_low_exact_context"
+    )
     failed = signed_boundary_dc_ledger({**receipts, "provider_native": {"status": "error", "error": "x"}})
     assert failed["status"] == "incomplete" and failed["failed_stages"] == ["provider_native"]
     missing = signed_boundary_dc_ledger({"final": receipt})

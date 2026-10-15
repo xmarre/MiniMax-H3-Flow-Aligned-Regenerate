@@ -53,6 +53,7 @@ into the change each recorded stage introduces relative to the previous one:
 | --- | --- | --- |
 | `source_low` | nothing | `source_low_native` |
 | `source_prefix_write` | `source_low_native` | `source_low_exact_context` |
+| `source_prefix_write_and_shadow_clean_selection` (replaces the row above when the shadow AV handoff source is selected; the shadow clean video can also replace generated tokens) | `source_low_native` | `source_low_exact_context` |
 | `provider_transfer` | `source_low_exact_context` | `provider_native` |
 | `provider_boundary_pair_replacement` (optional) | `provider_native` | `provider_boundary_pair_replaced` |
 | `pre_high_correction_and_exact_restore` | previous stage | `pre_high_exact_restored` |
