@@ -59,7 +59,6 @@ from .handoff import (
     build_handoff_state,
     deterministic_video_noise,
 )
-from .high_boundary_transition import prepare_high_boundary_transition, resolve_high_boundary_transition
 from .high_stage_boundary import (
     HIGH_BOUNDARY_REFERENCE_POLICY,
     HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
@@ -3598,9 +3597,6 @@ def run_partitioned_progressive(
     uniform_source = spatial_stage_control in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
     exact_uniform_context = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT
     prefix_projection = initial_model_options.get(SOURCE_PREFIX_PROJECTION_KEY)
-    high_boundary_transition = resolve_high_boundary_transition(initial_model_options)
-    if high_boundary_transition is not None and (not uniform_source or band_mode):
-        raise RuntimeError("high boundary transition supports uniform-source continuations only")
     source_carry = source_carry_owner(guider)
     from .boundary_witness import WITNESS_DIRECTORY_OPTION, witness_requested
 
@@ -6398,7 +6394,7 @@ def run_partitioned_progressive(
             high_prediction_gauge_bridge_support_tokens=(
                 bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
             ),
-            sampler_latent_mask_unchanged=high_boundary_transition is None,
+            sampler_latent_mask_unchanged=True,
             sampler_entry_state_unchanged=True,
         )
 
@@ -6484,13 +6480,6 @@ def run_partitioned_progressive(
                 extra_sampler_lifetimes=0,
             )
 
-        transition_clean = None
-        if high_boundary_transition is not None:
-            if target_band is not None:
-                raise RuntimeError("high boundary transition supports uniform-source continuations only")
-            stop = stage_plan.prefix_t + high_boundary_transition.tokens
-            transition_clean = restored_clean[:, :, stage_plan.prefix_t : stop].detach().clone()
-
         # Release registration witnesses. Only the executed learned source/target
         # guidance pair remains owned for high; it is released on success or failure.
         del restored_clean
@@ -6525,28 +6514,6 @@ def run_partitioned_progressive(
             binding.metrics,
             prefix_t=stage_plan.prefix_t,
         )
-        high_latent_image = latent_image
-        if high_boundary_transition is not None:
-            if model_options.get("denoise_mask_function") is not None:
-                raise RuntimeError("high boundary transition cannot own the mask while denoise_mask_function is set")
-            high_latent_image, target_noise, high_denoise_mask, transition_receipt = prepare_high_boundary_transition(
-                high_boundary_transition,
-                latent_image=latent_image,
-                target_raw=target_raw,
-                target_noise=target_noise,
-                denoise_mask=high_denoise_mask,
-                preserved_noise=noise,
-                transition_clean=transition_clean,
-                prefix_t=stage_plan.prefix_t,
-                sigma=sigma,
-                noise_scale=float(getattr(getattr(base_model, "model_sampling", None), "noise_scale", 1.0)),
-                shapes=target_shapes,
-                process_latent_in=lambda value: _process_latent_in(base_model, value, target_shapes),
-                noise_argument=lambda state, value_sigma, clean: _noise_argument(base_model, state, value_sigma, clean),
-                merge_preserved_noise=_merge_preserved_noise,
-            )
-            transition_clean = None
-            binding.metrics.event("partitioned_high_boundary_transition", **transition_receipt)
         if boundary_window_evidence is not None:
             high_video_mask, _ = unpack_streams(high_denoise_mask, target_shapes)
             boundary_window_evidence.capture("initial_high_video_mask", high_video_mask)
@@ -6586,7 +6553,7 @@ def run_partitioned_progressive(
         ):
             result = executor(
                 target_noise,
-                high_latent_image,
+                latent_image,
                 sampler,
                 high_sigmas,
                 high_denoise_mask,
