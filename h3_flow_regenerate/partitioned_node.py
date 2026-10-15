@@ -8,6 +8,11 @@ from .boundary_witness import WITNESS_DIRECTORY_OPTION
 from .comfy_compat import _put_wrapper_first, patch_flow_model
 from .guidance import GuidanceConfig
 from .handoff import ProgressiveTargetInputConfig
+from .high_native_temporal_continuity import (
+    HIGH_NATIVE_TEMPORAL_CONTINUITY_KEY,
+    HIGH_NATIVE_TEMPORAL_CONTINUITY_OFF,
+    HIGH_NATIVE_TEMPORAL_CONTINUITY_OPTIONS,
+)
 from .legacy_diagnostics import retire_low_replay_controls
 from .metrics import H3FlowMetrics
 from .nodes import H3ProgressiveTargetInputHandoff, pixel_to_safe_latent
@@ -806,6 +811,19 @@ class H3NativeSourceContinuationHandoff(H3PartitionedExactPrefixDiagnosticHandof
             },
         )
         spec["optional"]["capture_boundary_witness"] = copy.deepcopy(legacy["required"]["capture_boundary_witness"])
+        # Append as OPTIONAL to preserve positional widgets in saved workflows.
+        spec["optional"]["high_native_temporal_continuity"] = (
+            list(HIGH_NATIVE_TEMPORAL_CONTINUITY_OPTIONS),
+            {
+                "default": HIGH_NATIVE_TEMPORAL_CONTINUITY_OFF,
+                "tooltip": (
+                    "Experimental native high-stage sigma/conditioning transition at the first two "
+                    "generated temporal tokens. Uses exactly 0.5/0.75 high denoise masks and the "
+                    "pre-high clean handoff as their matched sampler reference. No additional "
+                    "H3/VAE calls. Off preserves the current sampling path exactly."
+                ),
+            },
+        )
         return spec
 
     def patch(
@@ -827,6 +845,7 @@ class H3NativeSourceContinuationHandoff(H3PartitionedExactPrefixDiagnosticHandof
         audio_guided_overlap_mode,
         audio_guided_overlap_ticks,
         uniform_source_detail_transport,
+        high_native_temporal_continuity=HIGH_NATIVE_TEMPORAL_CONTINUITY_OFF,
         source_prefix_projection="native_source_carry_target_band",
         metrics=None,
         temporal_weight=0.20,
@@ -839,7 +858,9 @@ class H3NativeSourceContinuationHandoff(H3PartitionedExactPrefixDiagnosticHandof
                 "native source continuation supports native_source_carry, native_source_carry_target_band "
                 "or latent_bicubic"
             )
-        return super().patch(
+        if high_native_temporal_continuity not in HIGH_NATIVE_TEMPORAL_CONTINUITY_OPTIONS:
+            raise ValueError("unsupported native high temporal continuity mode")
+        patched, metrics = super().patch(
             model=model,
             trajectory=trajectory,
             source_mode=source_mode,
@@ -865,6 +886,11 @@ class H3NativeSourceContinuationHandoff(H3PartitionedExactPrefixDiagnosticHandof
             uniform_source_detail_transport=uniform_source_detail_transport,
             capture_boundary_witness=capture_boundary_witness,
         )
+        if high_native_temporal_continuity == HIGH_NATIVE_TEMPORAL_CONTINUITY_OFF:
+            patched.model_options.pop(HIGH_NATIVE_TEMPORAL_CONTINUITY_KEY, None)
+        else:
+            patched.model_options[HIGH_NATIVE_TEMPORAL_CONTINUITY_KEY] = high_native_temporal_continuity
+        return patched, metrics
 
 
 NODE_CLASS_MAPPINGS = {
