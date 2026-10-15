@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from h3_flow_regenerate.partitioned_scheduler import (
+    PARTITIONED_SOL_COMPATIBLE_KERNEL_CONTRACTS,
     PARTITIONED_SOL_REQUIRED_METADATA,
     SOL_RUNTIME_KEY,
     PartitionedPreflightUnsupported,
@@ -17,8 +18,10 @@ def _guider(metadata):
     return SimpleNamespace(model_options={"transformer_options": transformer_options})
 
 
-def test_partitioned_sol_preflight_accepts_coordinated_runtime_contract():
-    _validate_partitioned_sol_compat(_guider(dict(PARTITIONED_SOL_REQUIRED_METADATA)))
+@pytest.mark.parametrize("kernel_contract", PARTITIONED_SOL_COMPATIBLE_KERNEL_CONTRACTS)
+def test_partitioned_sol_preflight_accepts_coordinated_runtime_contract(kernel_contract):
+    metadata = dict(PARTITIONED_SOL_REQUIRED_METADATA, kernel_contract=kernel_contract)
+    assert _validate_partitioned_sol_compat(_guider(metadata)) is True
 
 
 def test_partitioned_sol_preflight_allows_native_attention_without_sol():
@@ -36,6 +39,9 @@ def test_partitioned_sol_preflight_allows_native_attention_without_sol():
         ("backend", "unknown"),
         ("attention_ownership", "inherit"),
         ("kernel_contract", "old-kernel"),
+        ("kernel_contract", "sana-sol-engine-sol-attn-64-rect-sm120-query-origin-v6"),
+        ("kernel_contract", []),
+        ("kernel_contract", None),
         ("history_policy", "other-history"),
     ],
 )
