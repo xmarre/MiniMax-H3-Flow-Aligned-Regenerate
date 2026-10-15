@@ -1,7 +1,8 @@
 """Offline continuation replay through the resident native H3 VAE.
 
 Reports and optional PNG previews are saved locally. No sampler, production
-latent, or decoder configuration is modified.
+latent, or decoder configuration is modified. Temporary model ownership ends
+with the audit prompt, including when the audit fails.
 """
 
 from __future__ import annotations
@@ -44,12 +45,13 @@ DETAIL_REGIONS = ("off", "upper_left")
 
 
 class _AuditModelOwners:
-    """Keep weakly registered patchers alive across diagnostic cache pruning.
+    """Keep cache-pruned patchers alive only while the current audit runs.
 
     Core evaluates IS_CHANGED before pruning the preceding workflow's owners.
-    Its public cache-provider lifecycle releases our replacement owners after
-    the next non-audit prompt. Explicit unload and memory admission still work.
-    This provider stores no cached outputs and does not change Core functions.
+    A temporary strong owner protects model inputs during that audit prompt,
+    but retaining it across prompt completion pins the prior generation's
+    model patchers into the next generation and can cause VRAM exhaustion.
+    Explicit unload and memory admission still work. No outputs are cached.
     """
 
     def __init__(self):
@@ -72,8 +74,11 @@ class _AuditModelOwners:
         self.claimed = False
 
     def on_prompt_end(self, prompt_id):
-        if not self.claimed:
-            self.models = ()
+        # PromptExecutor invokes this in finally, also after a failed audit.
+        # Never carry strong references to all loaded models into the next
+        # generation. Its own model graph/cache must establish new ownership.
+        self.models = ()
+        self.claimed = False
 
     def should_cache(self, context, value=None):
         return False
@@ -1200,7 +1205,7 @@ class H3FlowLocalBoundaryAudit:
     DESCRIPTION = (
         "Replay saved continuation operands across native VAE windows at the protected-prefix join. "
         "Supports target-band and uniform-source bundles. Use the resident production video VAE "
-        "and the boundary bundle directory. Preserves loaded model owners through prompt cleanup; "
+        "and the boundary bundle directory. Temporarily retains models only during the audit prompt; "
         "insufficient decode memory stops the audit. "
         "Linux paths and verified local WSL UNC paths are accepted. "
         "Set the assembled chunk-join frame, or zero for relative frame labels. "

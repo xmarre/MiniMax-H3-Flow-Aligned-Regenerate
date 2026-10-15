@@ -92,24 +92,22 @@ def test_native_prompt_pruning_and_post_audit_gc(core, monkeypatch, guarded, cac
 
             monkeypatch.setattr(caching, "virtual_memory_available", lambda: 0)
             caches.outputs.ram_release(1, min_entry_size=0)
+        if guarded:
+            # Strong references protect inputs after audit prompt cache pruning.
+            assert len(core.owners.models) == 3
+            assert all(ref() is not None for ref in refs)
         core.execution.PromptExecutor._notify_prompt_lifecycle(None, "end", "audit-1")
         gc.collect()
-        assert all(ref() is not None for ref in refs) is guarded
-        assert len(core.detached) == (0 if guarded else 3)
+        # No model may stay pinned by a finished audit, irrespective of cache mode.
+        assert all(ref() is None for ref in refs)
+        assert len(core.detached) == 3
+        assert core.owners.models == ()
         # ComfyUI saves this same prompt in history. It must contain no models.
         json.dumps(prompt)
         if guarded:
-            for index in range(3):
-                await prepare(core, caches, audit_prompt(), f"repeat-{index}")
-                core.execution.PromptExecutor._notify_prompt_lifecycle(None, "end", f"repeat-{index}")
-                gc.collect()
-                assert all(ref() is not None for ref in refs)
-                assert len(core.owners.models) == 3
             await prepare(core, caches, {"model": {"class_type": "LifetimeModel", "inputs": {}}}, "next-generation")
+            assert core.owners.models == ()
             core.execution.PromptExecutor._notify_prompt_lifecycle(None, "end", "next-generation")
-            gc.collect()
-            assert all(ref() is None for ref in refs)
-            assert len(core.detached) == 3
 
     asyncio.run(run())
 
@@ -119,10 +117,9 @@ def test_failed_audit_still_preserves_models_and_explicit_unload_remains_availab
         caches = core.execution.CacheSet()
         refs = await seed_models(core, caches)
         await prepare(core, caches, audit_prompt(), "failed-audit")
-        # Execution raises before producing an output, but Core invokes end in finally.
-        core.execution.PromptExecutor._notify_prompt_lifecycle(None, "end", "failed-audit")
-        gc.collect()
+        # Even if execution fails, inputs stay owned until PromptExecutor's finally.
         assert all(ref() is not None for ref in refs)
+        assert len(core.owners.models) == 3
         unloaded = []
 
         def unload(self, *args, **kwargs):
@@ -130,9 +127,15 @@ def test_failed_audit_still_preserves_models_and_explicit_unload_remains_availab
             return True
 
         monkeypatch.setattr(core.management.LoadedModel, "model_unload", unload)
+        # Explicit unload is still allowed during the audit's temporary ownership.
         core.management.unload_all_models()
         assert len(unloaded) == 3
         assert core.management.current_loaded_models == []
         assert core.management.loaded_models() == []
+        # Prompt completion must release owners even on a failed audit.
+        core.execution.PromptExecutor._notify_prompt_lifecycle(None, "end", "failed-audit")
+        gc.collect()
+        assert all(ref() is None for ref in refs)
+        assert core.owners.models == ()
 
     asyncio.run(run())
