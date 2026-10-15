@@ -1705,3 +1705,43 @@ def test_uniform_coupled_entry_retains_measured_residual_without_frame_gauge(mon
     original, _ = unpack_streams(run.latent_image, run.shapes)
     assert torch.equal(video[:, :, :PROTECTED_T], original[:, :, :PROTECTED_T])
     assert run.binding.active_capture is None
+
+
+def test_signed_boundary_dc_receipts_attribute_the_seam_without_changing_output(monkeypatch):
+    import h3_flow_regenerate.partitioned_scheduler as scheduler
+
+    stages = ("source_low_native", "source_low_exact_context", "provider_native", "pre_high_exact_restored", "final")
+    run = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE)
+    receipts = {event["stage"]: event for event in _events(run.metrics, "partitioned_signed_boundary_dc")}
+    assert tuple(receipts) == stages
+    assert all(receipt["status"] == "measured" for receipt in receipts.values())
+    assert receipts["source_low_native"]["grid_hw"] == list(SOURCE_HW)
+    assert receipts["source_low_exact_context"]["shadow_clean_selected"] is False
+    assert receipts["final"]["grid_hw"] == list(TARGET_HW)
+    transfer = _events(run.metrics, "partitioned_transfer")[0]
+    complete = _events(run.metrics, "partitioned_exact_prefix_complete")[0]
+    for stage, expected in (
+        ("provider_native", transfer["upscaler_native_seam_spatial_mean_rms"]),
+        ("pre_high_exact_restored", transfer["corrected_exact_seam_spatial_mean_rms"]),
+        ("final", complete["final_seam_spatial_mean_rms"]),
+    ):
+        assert receipts[stage]["boundary_step_rms"] == pytest.approx(expected, rel=1e-4, abs=1e-6)
+    (ledger,) = _events(run.metrics, "partitioned_signed_boundary_dc_ledger")
+    assert ledger["status"] == "complete" and tuple(ledger["stages"]) == stages
+    total = sum(row["signed_contribution_to_final_norm"] for row in ledger["components"].values())
+    assert total == pytest.approx(ledger["final_step_norm"], rel=1e-5, abs=1e-7)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("instrumentation failure")
+
+    monkeypatch.setattr(scheduler, "measure_signed_boundary_dc", broken)
+    failing = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE)
+    assert torch.equal(failing.result, run.result)
+    failed = _events(failing.metrics, "partitioned_signed_boundary_dc")
+    assert {receipt["status"] for receipt in failed} == {"error"}
+    assert _events(failing.metrics, "partitioned_signed_boundary_dc_ledger")[0]["status"] == "incomplete"
+
+    monkeypatch.setattr(scheduler, "measure_signed_boundary_dc", lambda *args, **kwargs: {})
+    monkeypatch.setattr(scheduler, "signed_boundary_dc_ledger", lambda receipts: {})
+    control = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE)
+    assert torch.equal(control.result, run.result)
