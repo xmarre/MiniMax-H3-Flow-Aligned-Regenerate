@@ -65,6 +65,7 @@ from .high_stage_boundary import (
     HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS,
     high_boundary_contract,
 )
+from .low_cfg_branch_dc import capture_low_cfg_branch_dc, low_cfg_branch_dc_receipt
 from .low_input_pairing import make_low_input_pairing_receipt
 from .partitioned_attention import (
     ATTENTION_BACKEND_HISTORY_KEY as PARTITIONED_ATTENTION_HISTORY_KEY,
@@ -4280,6 +4281,8 @@ def run_partitioned_progressive(
             sampler_shapes=target_shapes,
             video_view=lambda video: target_band_source_view(video, target_band),
         )
+    low_cfg_rows: list[dict[str, Any]] = []
+    low_latent_format = getattr(getattr(guider.model_patcher, "model", None), "latent_format", None)
     try:
         _reset_guider_conds(guider, template=conditioning_template)
         low_started = time.perf_counter()
@@ -4288,6 +4291,14 @@ def run_partitioned_progressive(
             binding.metrics.increment("progressive_sampler_invocations")
             domain_calls_before = _domain_uniform_counters(binding.metrics)
             with (
+                capture_low_cfg_branch_dc(
+                    model_options,
+                    low_shapes,
+                    stage_plan.prefix_t,
+                    stage="low",
+                    rows=low_cfg_rows,
+                    latent_format=low_latent_format,
+                ),
                 _flow_stage_contract(guider, "low"),
                 _partitioned_stage_contract(
                     guider,
@@ -4335,6 +4346,14 @@ def run_partitioned_progressive(
             binding.metrics.increment("progressive_history_boundaries")
             domain_calls_before = _domain_uniform_counters(binding.metrics)
             with (
+                capture_low_cfg_branch_dc(
+                    model_options,
+                    low_shapes,
+                    stage_plan.prefix_t,
+                    stage="probe",
+                    rows=low_cfg_rows,
+                    latent_format=low_latent_format,
+                ),
                 _flow_stage_contract(guider, "probe"),
                 _high_stage_contract(guider),
                 _partitioned_stage_contract(
@@ -4371,6 +4390,7 @@ def run_partitioned_progressive(
     except BaseException as exc:
         _finish_capture(binding, error=exc)
         raise
+    binding.metrics.event("partitioned_low_cfg_branch_dc", **low_cfg_branch_dc_receipt(low_cfg_rows))
 
     committed_low_run = _finish_capture(binding)
     if low_input_pairing_requested:

@@ -240,7 +240,20 @@ def _harness(
             class_obj = guider
 
             def __call__(self, x, timestep, model_options, seed):
-                return core(x, float(timestep.reshape(-1)[0]), shapes, mask_packed)
+                denoised = core(x, float(timestep.reshape(-1)[0]), shapes, mask_packed)
+                for function in model_options.get("sampler_post_cfg_function", []):
+                    denoised = function(
+                        {
+                            "denoised": denoised,
+                            "cond_denoised": denoised,
+                            "uncond_denoised": None,
+                            "cond_scale": 1.0,
+                            "sigma": timestep,
+                            "input": x,
+                            "model_options": model_options,
+                        }
+                    )
+                return denoised
 
         return flow_predict_wrapper(Predict(), x, torch.tensor([float(sigma)]), guider.model_options, 5)
 
@@ -1708,6 +1721,8 @@ def test_uniform_coupled_entry_retains_measured_residual_without_frame_gauge(mon
 
 
 def test_signed_boundary_dc_receipts_attribute_the_seam_without_changing_output(monkeypatch):
+    import contextlib
+
     import h3_flow_regenerate.partitioned_scheduler as scheduler
 
     stages = ("source_low_native", "source_low_exact_context", "provider_native", "pre_high_exact_restored", "final")
@@ -1741,7 +1756,14 @@ def test_signed_boundary_dc_receipts_attribute_the_seam_without_changing_output(
     assert {receipt["status"] for receipt in failed} == {"error"}
     assert _events(failing.metrics, "partitioned_signed_boundary_dc_ledger")[0]["status"] == "incomplete"
 
+    (cfg_receipt,) = _events(run.metrics, "partitioned_low_cfg_branch_dc")
+    assert cfg_receipt["status"] == "measured" and cfg_receipt["failed_evaluations"] == 0
+    assert {row["stage"] for row in cfg_receipt["rows"]} == {"low", "probe"}
+    assert all(row["tokens"] == [PROTECTED_T - 1, PROTECTED_T, PROTECTED_T + 1] for row in cfg_receipt["rows"])
+    assert "sampler_post_cfg_function" not in run.guider.model_options
+
     monkeypatch.setattr(scheduler, "measure_signed_boundary_dc", lambda *args, **kwargs: {})
     monkeypatch.setattr(scheduler, "signed_boundary_dc_ledger", lambda receipts: {})
+    monkeypatch.setattr(scheduler, "capture_low_cfg_branch_dc", lambda *args, **kwargs: contextlib.nullcontext())
     control = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE)
     assert torch.equal(control.result, run.result)

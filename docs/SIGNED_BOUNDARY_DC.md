@@ -68,6 +68,31 @@ cancel: large opposing changes, rather than one stage, then shape the final
 step. Read the vectors and cosines in that case, not only the projections.
 `preview_luma_step` gives the same split in approximate luma.
 
+## Low-stage CFG branches
+
+When a ledger places a step in `source_low`, the `partitioned_low_cfg_branch_dc`
+event shows where in the low stage it appears. During the low and probe sampler
+lifetimes, an observer on ComfyUI's `sampler_post_cfg_function` reduces, for
+every evaluation, four tensors to per-channel spatial means of tokens
+`p-1 .. p+1`:
+
+- the sampler input;
+- the conditional clean prediction;
+- the unconditional clean prediction;
+- the guided prediction.
+
+Each is reported with its boundary step and preview luma, and with the sigma and
+CFG scale. The predictions are the model's own, before the protected rows are
+restored, so token `p-1` shows how the model reads the protected context.
+
+- A step in the conditional prediction that the unconditional one lacks is selected by the prompt or conditioning and amplified by CFG.
+- A step in both is not explained by guidance; the generated tokens do not follow the context's tone in either branch.
+- The first evaluation, at the highest sigma, shows whether the step is decided before any generated content exists.
+
+With CFG scale 1, the unconditional branch is absent. Guiders that do not call
+ComfyUI's CFG function record `not_observed`. The guided prediction is returned
+unchanged, and an observer failure is recorded as an error row.
+
 ## Cost and failure behaviour
 
 Each receipt is one spatial-mean reduction over at most seven tokens of an
