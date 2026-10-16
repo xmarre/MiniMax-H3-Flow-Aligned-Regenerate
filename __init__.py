@@ -122,5 +122,11 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **DECODE_NODE_DISPLAY_NAME_MAPPINGS,
 }
 
+try:
+    from .h3_flow_regenerate.lifecycle_trace import install_from_environment
+except ImportError:  # Direct-file import used by packaging and test smoke checks.
+    from h3_flow_regenerate.lifecycle_trace import install_from_environment
+
+install_from_environment()
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
