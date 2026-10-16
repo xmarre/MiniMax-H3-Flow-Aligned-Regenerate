@@ -413,6 +413,12 @@ PARTITIONED_SOL_REQUIRED_METADATA = {
     "kernel_contract": "sana-sol-engine-sol-attn-64-rect-sm120-mapped-neighbor-v4",
     "history_policy": "attention_backend_history_v1",
 }
+# The query-origin extension changes the packaged CuTe launch ABI but preserves
+# the original zero-origin mapped/partitioned semantics used by Flow.
+PARTITIONED_SOL_COMPATIBLE_KERNEL_CONTRACTS = (
+    PARTITIONED_SOL_REQUIRED_METADATA["kernel_contract"],
+    "sana-sol-engine-sol-attn-64-rect-sm120-query-origin-v5",
+)
 
 
 class PartitionedPreflightUnsupported(RuntimeError):
@@ -1606,8 +1612,11 @@ def _validate_partitioned_sol_compat(guider: Any) -> bool:
     mismatches = [
         f"{name}={metadata.get(name)!r}"
         for name, expected in PARTITIONED_SOL_REQUIRED_METADATA.items()
-        if metadata.get(name) != expected
+        if name != "kernel_contract" and metadata.get(name) != expected
     ]
+    contract = metadata.get("kernel_contract")
+    if type(contract) is not str or contract not in PARTITIONED_SOL_COMPATIBLE_KERNEL_CONTRACTS:
+        mismatches.append(f"kernel_contract={contract!r}")
     if mismatches:
         raise PartitionedPreflightUnsupported(
             "partitioned exact-prefix requires compatible Sol-H3 native runtime metadata: " + ", ".join(mismatches)

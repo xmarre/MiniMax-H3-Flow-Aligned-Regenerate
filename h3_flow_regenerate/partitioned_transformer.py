@@ -320,6 +320,43 @@ def _stage_partitioned_attention_override(
     return override
 
 
+def _sol_partitioned_capability_binding(override):
+    """Preserve Sol's optional capabilities through Flow's request wrapper.
+
+    Keep one stable binding per Flow provider so repeated block-option copies do
+    not create numerical-provider transitions. Only call this for Sol-selected
+    options: native/custom terminal providers must not inherit Sol's promises.
+    The binding owns Python callables only, never Q/K/V or prepared scratch.
+    """
+    from sol_h3.partitioned_request import partitioned_request_attention
+
+    provider = override.partitioned_attention_v1
+    execute = getattr(partitioned_request_attention, "grouped_kv_v1", None)
+    readonly = getattr(partitioned_request_attention, "_vdn_readonly_query_contract_v1", False) is True
+    if not callable(execute) and not readonly:
+        return provider
+    previous = getattr(override, "_h3_flow_sol_capability_binding", None)
+    if (
+        previous is not None
+        and previous[0] is partitioned_request_attention
+        and previous[1] is execute
+        and previous[2] is readonly
+    ):
+        return previous[3]
+
+    def bound(q, k, v, **kwargs):
+        if not sol_attention_selected(kwargs["transformer_options"]):
+            raise RuntimeError("Sol capability binding requires Sol-selected partitioned attention")
+        return provider(q, k, v, **kwargs)
+
+    if callable(execute):
+        bound.grouped_kv_v1 = execute
+    if readonly:
+        bound._vdn_readonly_query_contract_v1 = True
+    override._h3_flow_sol_capability_binding = (partitioned_request_attention, execute, readonly, bound)
+    return bound
+
+
 def _partitioned_transformer_options(
     options,
     partitioned_layout,
@@ -343,9 +380,11 @@ def _partitioned_transformer_options(
     block_options["minimax_h3_layout"] = partitioned_layout
     block_options[PARTITIONED_PREFIX_KEY] = partition_contract
     block_options[PARTITIONED_BLOCK_INDEX_KEY] = int(block_index)
-    block_options[PARTITIONED_ATTENTION_PROVIDER_KEY] = block_options[
-        "optimized_attention_override"
-    ].partitioned_attention_v1
+    attention_override = block_options["optimized_attention_override"]
+    partitioned_provider = attention_override.partitioned_attention_v1
+    if sol_attention_selected(block_options):
+        partitioned_provider = _sol_partitioned_capability_binding(attention_override)
+    block_options[PARTITIONED_ATTENTION_PROVIDER_KEY] = partitioned_provider
     if not sol_attention_selected(block_options) and "vdn_attention_preprocess_v1" not in block_options:
         entry = getattr(block_options["optimized_attention_override"], _PREPROCESS_ATTR, None)
         if entry is not None:
