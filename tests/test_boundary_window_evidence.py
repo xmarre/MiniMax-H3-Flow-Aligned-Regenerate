@@ -9,9 +9,15 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from h3_flow_regenerate import residual_evidence
 from h3_flow_regenerate.geometry import pack_streams, unpack_streams
 from h3_flow_regenerate.high_stage_boundary import high_boundary_contract
-from h3_flow_regenerate.residual_evidence import BoundaryWindowEvidence, export_residual_geometry_evidence
+from h3_flow_regenerate.residual_evidence import (
+    FULL_VIDEO_STAGE_NAMES,
+    BoundaryWindowEvidence,
+    export_residual_geometry_evidence,
+    full_video_byte_budget,
+)
 from h3_flow_regenerate.runtime import FLOW_BINDING_KEY, FLOW_STAGE_KEY, FlowBinding, flow_predict_wrapper
 
 
@@ -39,6 +45,41 @@ def test_full_stage_capture_checks_budget_before_copying_or_recording_a_stage():
     with pytest.raises(RuntimeError, match="CPU byte budget"):
         evidence.capture("provider_native_clean", video)
     assert set(evidence.tensors) == names
+
+
+def test_full_stage_budget_scales_with_the_target_grid():
+    prefix = torch.empty(1, 24, 12, 96, 64, device="meta")
+    temporal = 62
+    full_bytes = 24 * temporal * 96 * 64 * 4
+    assert len(FULL_VIDEO_STAGE_NAMES) * full_bytes > 256 * 1024 * 1024
+    assert full_video_byte_budget(prefix, temporal) > len(FULL_VIDEO_STAGE_NAMES) * full_bytes
+
+
+def test_derived_budget_admits_every_stage_snapshot_and_the_full_high_trace(monkeypatch):
+    monkeypatch.setattr(residual_evidence, "MIN_FULL_VIDEO_BYTE_BUDGET", 0)
+    video = torch.zeros(1, 24, 22, 4, 4)
+    evidence = BoundaryWindowEvidence(video[:, :, :12], 22, capture_full_video=True)
+    for name in FULL_VIDEO_STAGE_NAMES[:5]:
+        evidence.capture(name, video)
+    for index in range(evidence.plan["high_prediction_trace"]["max_calls"]):
+        evidence.observe_prediction(
+            video, point="before_flow", call_index=index, sigma=0.8, actual=True, sampler_input=video
+        )
+        evidence.observe_prediction(video, point="after_flow", call_index=index, sigma=0.8, actual=True)
+    evidence.capture("final_post_high_internal_clean", video)
+    trace = evidence.plan["high_prediction_trace"]
+    assert trace["omitted_call_indices"] == []
+    assert len(trace["calls"]) == trace["max_calls"]
+    assert all(name + "_full" in evidence.tensors for name in FULL_VIDEO_STAGE_NAMES)
+    assert evidence.cpu_tensor_bytes <= evidence.max_bytes
+
+
+def test_full_stage_capture_rejects_a_stage_outside_the_budgeted_set():
+    video = torch.zeros(1, 24, 22, 4, 4)
+    evidence = BoundaryWindowEvidence(video[:, :, :12], 22, capture_full_video=True)
+    with pytest.raises(RuntimeError, match="not covered by the CPU byte budget"):
+        evidence.capture("unbudgeted_stage", video)
+    assert set(evidence.tensors) == {"authoritative_prefix", "authoritative_prefix_full"}
 
 
 def test_full_stage_capture_rejects_a_different_timeline():

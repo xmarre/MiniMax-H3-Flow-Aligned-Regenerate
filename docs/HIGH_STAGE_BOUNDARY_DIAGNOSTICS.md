@@ -40,7 +40,8 @@ boundary windows before and after Flow guidance for the first 16 high calls.
 Each pair includes its call index, sigma, and actual/forecast provenance. The
 first actual pair reuses the existing snapshots. Later pairs retain only the
 boundary window and reserve space for the existing final snapshot within the
-256 MiB CPU budget; omitted call indices are explicit. Generation behavior and
+geometry-derived CPU budget, which covers all 16 call pairs; omitted call
+indices are explicit if an explicit smaller budget is configured. Generation behavior and
 model evaluation counts are unchanged. Capture adds CPU copying and disk I/O.
 
 Select `high_prediction_tone` in Local Boundary Audit's `audit_scope` on a new
