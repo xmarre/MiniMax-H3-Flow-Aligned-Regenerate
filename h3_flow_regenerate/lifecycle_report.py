@@ -187,16 +187,16 @@ def analyze_trace(trace: dict[str, Any]) -> dict[str, Any]:
         moved = fields.get("moved_bytes")
         seconds = _duration(span) * _NS
         entry = {
-                "start_s": _seconds(span["start_ns"] - start),
-                "event": span["name"],
-                "model_class": fields.get("model_class"),
-                "moved_mib": None if moved is None else round(moved / _MIB, 1),
-                "seconds": round(seconds, 3),
-                "gib_per_s": None if not moved or seconds <= 0 else round(moved / seconds / (1 << 30), 2),
-                "fully_unloaded": fields.get("fully_unloaded"),
-                "node": _label(_ancestor(span, by_id, "comfy.node")),
-                "inside_sampler": _ancestor(span, by_id, "sampler.cfg_guider_sample") is not None,
-            }
+            "start_s": _seconds(span["start_ns"] - start),
+            "event": span["name"],
+            "model_class": fields.get("model_class"),
+            "moved_mib": None if moved is None else round(moved / _MIB, 1),
+            "seconds": round(seconds, 3),
+            "gib_per_s": None if not moved or seconds <= 0 else round(moved / seconds / (1 << 30), 2),
+            "fully_unloaded": fields.get("fully_unloaded"),
+            "node": _label(_ancestor(span, by_id, "comfy.node")),
+            "inside_sampler": _ancestor(span, by_id, "sampler.cfg_guider_sample") is not None,
+        }
         paging = fields.get("host_pressure_delta")
         if isinstance(paging, dict):
             entry["host_pressure_delta"] = dict(paging)
