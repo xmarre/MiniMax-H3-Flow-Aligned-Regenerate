@@ -434,16 +434,12 @@ def format_report(summary: dict[str, Any], *, top: int = 15) -> str:
             "Process faults cover all process threads; VM swap counters are system-wide,",
             "not proof of paging in a particular model-load operation.",
             "",
-            "| model | load s | process major faults | system swap-in | system swap-out | "
-            "MemAvailable start→end KiB |",
+            "| model | load s | process major faults | system swap-in | system swap-out | MemAvailable start→end KiB |",
             "|---|---:|---:|---:|---:|---|",
         ]
         for item in paging_rows:
             paging = item["host_pressure_delta"]
-            memory = (
-                f"{item.get('host_memory_available_start_kib')}→"
-                f"{item.get('host_memory_available_end_kib')}"
-            )
+            memory = f"{item.get('host_memory_available_start_kib')}→{item.get('host_memory_available_end_kib')}"
             lines.append(
                 f"| {item['model_class']} | {item['seconds']:.3f} "
                 f"| {paging.get('process_major_faults')} | {paging.get('system_pswpin')} "

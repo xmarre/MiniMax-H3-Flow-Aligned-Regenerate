@@ -246,16 +246,29 @@ def test_trace_accounts_prompt_wall_without_double_counting(tmp_path):
     assert hooks.trace.gc_callback not in gc.callbacks
 
 
-
 def test_model_load_reports_host_paging_without_changing_execution(monkeypatch, tmp_path):
     clock = FakeClock()
     modules = _fake_comfy(clock)
-    snapshots = iter((
-        {"process_minor_faults": 13, "process_major_faults": 5, "system_pswpin": 100,
-         "system_pswpout": 200, "system_pgmajfault": 80, "memavailable_kib": 200_000},
-        {"process_minor_faults": 15, "process_major_faults": 8, "system_pswpin": 124,
-         "system_pswpout": 208, "system_pgmajfault": 83, "memavailable_kib": 180_000},
-    ))
+    snapshots = iter(
+        (
+            {
+                "process_minor_faults": 13,
+                "process_major_faults": 5,
+                "system_pswpin": 100,
+                "system_pswpout": 200,
+                "system_pgmajfault": 80,
+                "memavailable_kib": 200_000,
+            },
+            {
+                "process_minor_faults": 15,
+                "process_major_faults": 8,
+                "system_pswpin": 124,
+                "system_pswpout": 208,
+                "system_pgmajfault": 83,
+                "memavailable_kib": 180_000,
+            },
+        )
+    )
     monkeypatch.setattr(lt, "host_pressure_probe", lambda: next(snapshots))
     trace = lt.LifecycleTrace(clock=clock, memory_probe=lambda: None)
     hooks = lt.ComfyLifecycleHooks(trace, lambda: tmp_path)
@@ -267,8 +280,11 @@ def test_model_load_reports_host_paging_without_changing_execution(monkeypatch, 
         receipt = next(span for span in trace.spans if span["name"] == "model.load")
         assert receipt["fields"]["moved_bytes"] == 26 * GIB
         assert receipt["fields"]["host_pressure_delta"] == {
-            "process_minor_faults": 2, "process_major_faults": 3,
-            "system_pswpin": 24, "system_pswpout": 8, "system_pgmajfault": 3,
+            "process_minor_faults": 2,
+            "process_major_faults": 3,
+            "system_pswpin": 24,
+            "system_pswpout": 8,
+            "system_pgmajfault": 3,
         }
         assert receipt["fields"]["host_pressure_before"]["memavailable_kib"] == 200_000
         assert receipt["fields"]["host_pressure_after"]["memavailable_kib"] == 180_000
@@ -296,6 +312,7 @@ def test_host_paging_probe_failure_does_not_break_model_load(monkeypatch, tmp_pa
         assert receipt["fields"]["moved_bytes"] == 26 * GIB
     finally:
         hooks.uninstall()
+
 
 def test_wrappers_are_transparent_for_results_and_errors(tmp_path):
     clock = FakeClock()

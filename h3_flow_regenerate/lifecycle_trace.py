@@ -128,7 +128,6 @@ def _reset_cuda_peaks() -> bool:
     return True
 
 
-
 def host_pressure_probe() -> dict[str, int] | None:
     """Read bounded Linux paging evidence without a CUDA call or GPU sync.
 
