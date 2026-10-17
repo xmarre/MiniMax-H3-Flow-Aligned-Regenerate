@@ -1,3 +1,7 @@
+## v0.3.14 workflow notes
+
+The recommended production node remains **MiniMax H3 Native Source Continuation**, with the existing default low/probe/high settings. The [full-stage continuity audit example](examples/full-stage-continuity.workflow.json) includes the new stage-tone attribution and supports an optional assembled Continuum production image timeline; it is diagnostic only. Flow #107 preserves the selected Sol grouped K/V capability through Continuum. Profiling is opt-in through `H3_LIFECYCLE_TRACE=1`, not a required node or workflow change. See [lifecycle tracing](../docs/LIFECYCLE_TRACE.md).
+
 # Workflows
 
 This directory contains executable examples and non-executable wiring overlays. The distinction is intentional and explicit.
