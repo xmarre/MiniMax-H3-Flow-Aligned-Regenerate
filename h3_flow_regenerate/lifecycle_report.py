@@ -186,8 +186,7 @@ def analyze_trace(trace: dict[str, Any]) -> dict[str, Any]:
         fields = span["fields"]
         moved = fields.get("moved_bytes")
         seconds = _duration(span) * _NS
-        residency.append(
-            {
+        entry = {
                 "start_s": _seconds(span["start_ns"] - start),
                 "event": span["name"],
                 "model_class": fields.get("model_class"),
@@ -198,7 +197,16 @@ def analyze_trace(trace: dict[str, Any]) -> dict[str, Any]:
                 "node": _label(_ancestor(span, by_id, "comfy.node")),
                 "inside_sampler": _ancestor(span, by_id, "sampler.cfg_guider_sample") is not None,
             }
-        )
+        paging = fields.get("host_pressure_delta")
+        if isinstance(paging, dict):
+            entry["host_pressure_delta"] = dict(paging)
+            before = fields.get("host_pressure_before") or {}
+            after = fields.get("host_pressure_after") or {}
+            entry["host_memory_available_start_kib"] = before.get("memavailable_kib")
+            entry["host_memory_available_end_kib"] = after.get("memavailable_kib")
+            entry["host_swap_free_start_kib"] = before.get("swapfree_kib")
+            entry["host_swap_free_end_kib"] = after.get("swapfree_kib")
+        residency.append(entry)
 
     samplers = []
     for span in main:
@@ -417,6 +425,30 @@ def format_report(summary: dict[str, Any], *, top: int = 15) -> str:
             f"| {item['seconds']:.3f} | {item['gib_per_s']} | {item['fully_unloaded']} | {item['node']} "
             f"| {item['inside_sampler']} |"
         )
+    paging_rows = [item for item in summary["residency"] if item.get("host_pressure_delta") is not None]
+    if paging_rows:
+        lines += [
+            "",
+            "## Host paging during model loads (Linux/WSL)",
+            "",
+            "Process faults cover all process threads; VM swap counters are system-wide,",
+            "not proof of paging in a particular model-load operation.",
+            "",
+            "| model | load s | process major faults | system swap-in | system swap-out | "
+            "MemAvailable start→end KiB |",
+            "|---|---:|---:|---:|---:|---|",
+        ]
+        for item in paging_rows:
+            paging = item["host_pressure_delta"]
+            memory = (
+                f"{item.get('host_memory_available_start_kib')}→"
+                f"{item.get('host_memory_available_end_kib')}"
+            )
+            lines.append(
+                f"| {item['model_class']} | {item['seconds']:.3f} "
+                f"| {paging.get('process_major_faults')} | {paging.get('system_pswpin')} "
+                f"| {paging.get('system_pswpout')} | {memory} |"
+            )
     lines += ["", "## GPU-idle intervals (NVML)", ""]
     if not summary["gpu_idle_intervals"]:
         lines.append("None detected (or NVML unavailable).")

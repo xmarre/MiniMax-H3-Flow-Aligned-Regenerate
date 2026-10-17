@@ -272,6 +272,11 @@ def test_model_load_reports_host_paging_without_changing_execution(monkeypatch, 
         }
         assert receipt["fields"]["host_pressure_before"]["memavailable_kib"] == 200_000
         assert receipt["fields"]["host_pressure_after"]["memavailable_kib"] == 180_000
+        summary = analyze_trace(trace.snapshot())
+        assert summary["residency"][0]["host_pressure_delta"]["system_pswpin"] == 24
+        report = format_report(summary)
+        assert "Host paging during model loads" in report
+        assert "QwenTE | 2.000 | 3 | 24 | 8 | 200000→180000" in report
     finally:
         hooks.uninstall()
 

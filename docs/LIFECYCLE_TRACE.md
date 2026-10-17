@@ -70,7 +70,10 @@ individual kernels.
   `memavailable_kib` and `swapfree_kib` are endpoint snapshots, **not**
   cumulative deltas. These counters correlate a slow H2D load with paging,
   but system-wide changes cannot prove this process caused the activity.
-  They do not require CUDA synchronization or change memory policy.
+  They do not require CUDA synchronization or change memory policy. The
+  report also emits a **Host paging during model loads** table for such
+  traces, showing major-fault and swap counter changes beside weight-load
+  time and host-available memory endpoints.
 * **Flow stages** turns Flow's `low_stage_wall`, `handoff_probe_wall`,
   `handoff_transfer_wall` and `high_stage_wall` events into stage rows with
   the interval's peak allocated/reserved bytes (peak counters are reset at
