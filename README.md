@@ -1,5 +1,17 @@
 # MiniMax H3 Flow-Aligned Regenerate
 
+## v0.3.14 — coordinated release (17 October 2026)
+
+| Component | Release | Included PRs |
+| --- | --- | --- |
+| Flow-Aligned Regenerate | [v0.3.14](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/releases/tag/v0.3.14) | [#102](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/102), [#103](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/103), [#105](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/105), [#107](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/107), [#108](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/108) |
+| Sol-H3 | [v0.1.11](https://github.com/xmarre/ComfyUI-Sol-H3/releases/tag/v0.1.11) | [#41](https://github.com/xmarre/ComfyUI-Sol-H3/pull/41) |
+| VDN-H3-Plus | [v1.5.10](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/releases/tag/v1.5.10) | [#41–#44](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/44) |
+| H3 Continuum-Plus | [v3.4.9](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/releases/tag/v3.4.9) | [#44](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/44), [#46](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/46), [#47](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/47) |
+
+The recommended **MiniMax H3 Native Source Continuation** workflow is unchanged. Flow #107 retains Sol-H3 grouped K/V fusion for the continuation path; full VDN trained-linear work must remain enabled. Diagnostic options from #102/#103/#108 capture full-stage tone, target-sized evidence and per-prompt lifecycle/paging receipts; #105 prevents old local audits holding model owners across prompts. The diagnostic example is [full-stage continuity](workflows/examples/full-stage-continuity.workflow.json). Set `H3_LIFECYCLE_TRACE=1` before ComfyUI startup to capture lifecycle data; it is opt-in. No Keyless implementations are included.
+
+
 Training-free ComfyUI nodes for reusing lower-resolution MiniMax H3 structure while producing a higher-resolution result, with dedicated Continuum support for exact-prefix continuation.
 
 The project has two main approaches:

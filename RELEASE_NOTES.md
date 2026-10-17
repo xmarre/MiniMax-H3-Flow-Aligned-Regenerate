@@ -1,3 +1,26 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.14
+
+## Integrated changes
+
+- **#102** — read-only full-stage/assembled-output luminance attribution in Local Boundary Audit, including optional actual production images; example full-stage workflow updated. This measures rather than alters output.
+- **#103** — compute the explicit full-video evidence memory budget from target geometry, preventing the 256 MiB fixed-ceiling crash on larger target grids.
+- **#105** — release model-owner references at every audit prompt end rather than pinning model patchers into future prompts; respects Core eviction authority.
+- **#107** — preserve Sol grouped K/V producer capabilities across Flow continuation wrapper dispatch. Owner two-chunk Sol runs show 8,800 grouped fused calls and full trained VDN 550/550 readouts.
+- **#108** — optional per-prompt lifecycle trace (`H3_LIFECYCLE_TRACE=1`), host paging counters, NVML and stage allocation peaks, plus offline bottleneck reporter. Overlapping sibling spans cannot be treated as a strict wall-time partition; trace data is diagnostic, not a generation change.
+
+The recommended **MiniMax H3 Native Source Continuation** node, trained VDN complement, exact prefix/audio preservation, and existing sampler defaults are unchanged. Comparisons against Core MSA/BSA (166/550 VDN readouts) are not exact-work speed comparisons. Lookahead is supplied by the separate Continuum v3.4.9 companion. No Keyless work is included.
+
+## Coordinated releases
+
+| Component | Release | Included PRs |
+| --- | --- | --- |
+| Flow-Aligned Regenerate | [v0.3.14](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/releases/tag/v0.3.14) | [#102](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/102), [#103](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/103), [#105](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/105), [#107](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/107), [#108](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/108) |
+| Sol-H3 | [v0.1.11](https://github.com/xmarre/ComfyUI-Sol-H3/releases/tag/v0.1.11) | [#41](https://github.com/xmarre/ComfyUI-Sol-H3/pull/41) |
+| VDN-H3-Plus | [v1.5.10](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/releases/tag/v1.5.10) | [#41–#44](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/44) |
+| H3 Continuum-Plus | [v3.4.9](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/releases/tag/v3.4.9) | [#44](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/44), [#46](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/46), [#47](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/47) |
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.13
 
 ## Scene-consistent continuation by default

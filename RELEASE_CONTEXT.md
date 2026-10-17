@@ -1,3 +1,14 @@
+## Coordinated companion versions — 17 October 2026
+
+| Component | Release | Included PRs |
+| --- | --- | --- |
+| Flow-Aligned Regenerate | [v0.3.14](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/releases/tag/v0.3.14) | [#102](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/102), [#103](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/103), [#105](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/105), [#107](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/107), [#108](https://github.com/xmarre/MiniMax-H3-Flow-Aligned-Regenerate/pull/108) |
+| Sol-H3 | [v0.1.11](https://github.com/xmarre/ComfyUI-Sol-H3/releases/tag/v0.1.11) | [#41](https://github.com/xmarre/ComfyUI-Sol-H3/pull/41) |
+| VDN-H3-Plus | [v1.5.10](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/releases/tag/v1.5.10) | [#41–#44](https://github.com/xmarre/ComfyUI-VDN-H3-Plus/pull/44) |
+| H3 Continuum-Plus | [v3.4.9](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/releases/tag/v3.4.9) | [#44](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/44), [#46](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/46), [#47](https://github.com/xmarre/ComfyUI-H3-Continuum-Plus/pull/47) |
+
+Update companions together for the full Sol/VDN/Flow/Continuum stack. Sol is optional and only selected when configured as the attention backend. The completed CPU checks and owner observations do not establish identical work between Sol full VDN (550/550) and Core MSA/BSA reduced VDN (166/550), or full-tensor SM120 bitwise parity for the new VDN temporal kernel. Keyless PRs and other upstream patches are **not** part of this release.
+
 ## Coordinated companion versions
 
 Flow v0.3.13 includes PR #101. The companion packages below are separate releases;
