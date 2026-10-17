@@ -1189,7 +1189,10 @@ def test_full_stage_replay_preserves_complete_timelines_and_native_pixel_origin(
     assert torch.equal(vae.inputs[1][:, :, 12:], vae.inputs[2][:, :, 12:])
     assert "provider_native_to_provider" in result["comparisons"]
     assert seen["labels"] == list(range(170, 196))
-    assert seen["selected"] == [174, 175, 180, 190]
+    assert seen["selected"] == [174, 175, 176, 177, 178, 180, 187, 190]
+    assert result["stage_tone_attribution"]["policy"] == "full_stage_boundary_tone_ledger_v1"
+    assert result["stage_tone_attribution"]["raw_production_output_provided"] is False
+    assert result["stage_tone_attribution"]["global_frame_labels"] == list(range(170, 196))
     # Chunk origin is 175-39=136; f170 is pixel 34 and f175 is pixel 39.
     for frames in seen["pixels"].values():
         assert float(frames[0].mean()) == pytest.approx(0.34, abs=1e-6)
@@ -1300,3 +1303,55 @@ def test_relative_join_labels_remain_available_without_feature_tracking(bundle, 
     absolute = audit.audit_local_boundary(FakeVAE(), directory, 175, lambda x: x)
     for name, stage in report["stages"].items():
         assert stage["frame_labels"] == [frame - 175 for frame in absolute["stages"][name]["frame_labels"]]
+
+
+def test_full_stage_decoder_context_crosscheck_and_image_comparison(full_uniform_bundle, monkeypatch):
+    directory, _manifest, _source = full_uniform_bundle
+    monkeypatch.setattr(audit, "geometry_comparison", lambda a, b, labels: {"frames": labels})
+    # The test VAE returns a deterministic full-length 56-frame native decode
+    # with the same spatial size on all seven captured stages.
+    baseline = audit.audit_local_boundary(FakeVAE(), directory, 175, lambda x: x, scope="full_stage_continuity")
+    assert baseline["extra_vae_calls"] == 7
+    vae = FakeVAE()
+    # FakeVAE returns 16x enlarged RGB for every temporal slice.
+    # Get target shape without inspecting or modifying production state.
+    _latent_plan, stage_latents, _ = audit.load_replay_operands(
+        directory, 175, include_source=True, include_full_stages=True
+    )
+    height, width = [dimension * 16 for dimension in stage_latents["final"].shape[-2:]]
+    images = torch.full((200, height, width, 3), 0.35)
+    report = audit.audit_local_boundary(
+        vae,
+        directory,
+        175,
+        lambda x: x,
+        scope="full_stage_continuity",
+        decoder_context_crosscheck=True,
+        production_images=images,
+    )
+    assert report["extra_vae_calls"] == 11
+    assert len(vae.inputs) == 11
+    context = report["stage_tone_attribution"]["decoder_context_crosscheck"]
+    assert context["stages"]["source_grid"]["frame_labels"] == list(range(170, 175))
+    assert context["stages"]["final"]["frame_labels"] == list(range(170, 175))
+    assert (
+        report["stage_tone_attribution"]["production_image_comparison"][
+            "previous_chunk_reference_is_real_assembled_frame"
+        ]
+        is True
+    )
+
+
+@pytest.mark.parametrize("scope", ["stage_continuity", "transfer_and_decoder_context", "high_prediction_tone"])
+def test_production_comparison_is_rejected_outside_full_stage_without_vae(bundle, scope):
+    vae = FakeVAE()
+    with pytest.raises(ValueError, match="full_stage_continuity"):
+        audit.audit_local_boundary(
+            vae,
+            bundle[0],
+            175,
+            lambda x: x,
+            scope=scope,
+            production_images=torch.zeros((200, 32, 48, 3)),
+        )
+    assert vae.inputs == []
