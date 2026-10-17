@@ -98,7 +98,8 @@
       "audio_guided_overlap_ticks": 16,
       "uniform_source_detail_transport": true,
       "source_prefix_projection": "native_source_carry_target_band",
-      "capture_boundary_witness": false
+      "capture_boundary_witness": false,
+      "high_native_temporal_continuity": "off"
     },
     "class_type": "H3NativeSourceContinuationHandoff",
     "_meta": {

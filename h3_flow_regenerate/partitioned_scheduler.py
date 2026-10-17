@@ -59,6 +59,14 @@ from .handoff import (
     build_handoff_state,
     deterministic_video_noise,
 )
+from .high_native_temporal_continuity import (
+    HIGH_NATIVE_TEMPORAL_CONTINUITY_KEY,
+    HIGH_NATIVE_TEMPORAL_CONTINUITY_OFF,
+    HIGH_NATIVE_TEMPORAL_CONTINUITY_TWO_TOKEN,
+    high_native_temporal_clean_latent,
+    high_native_temporal_mask,
+    verify_high_native_temporal_entry,
+)
 from .high_stage_boundary import (
     HIGH_BOUNDARY_REFERENCE_POLICY,
     HIGH_PREDICTION_GAUGE_BRIDGE_POLICY,
@@ -3606,6 +3614,17 @@ def run_partitioned_progressive(
     uniform_source = spatial_stage_control in PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCES
     exact_uniform_context = spatial_stage_control == PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE_EXACT
     prefix_projection = initial_model_options.get(SOURCE_PREFIX_PROJECTION_KEY)
+    high_temporal_mode = initial_model_options.get(
+        HIGH_NATIVE_TEMPORAL_CONTINUITY_KEY, HIGH_NATIVE_TEMPORAL_CONTINUITY_OFF
+    )
+    if high_temporal_mode not in (HIGH_NATIVE_TEMPORAL_CONTINUITY_OFF, HIGH_NATIVE_TEMPORAL_CONTINUITY_TWO_TOKEN):
+        raise RuntimeError("unsupported native high temporal continuity policy")
+    if high_temporal_mode != HIGH_NATIVE_TEMPORAL_CONTINUITY_OFF and (
+        not uniform_source or initial_model_options.get("denoise_mask_function") is not None
+    ):
+        raise RuntimeError(
+            "native high temporal continuity requires uniform-source sampling and no denoise_mask_function"
+        )
     source_carry = source_carry_owner(guider)
     from .boundary_witness import WITNESS_DIRECTORY_OPTION, witness_requested
 
@@ -6362,9 +6381,37 @@ def run_partitioned_progressive(
             **splice_diagnostics,
         )
 
+        # Default path is strictly unchanged. The optional native high transition
+        # needs the clean handoff tokens as Core's own inpainting reference;
+        # the caller's latent_image usually has an empty generated suffix.
+        high_latent_image = latent_image
+        if high_temporal_mode == HIGH_NATIVE_TEMPORAL_CONTINUITY_TWO_TOKEN:
+            if model_options.get("denoise_mask_function") is not None:
+                raise RuntimeError("native high temporal continuity cannot share a denoise_mask_function")
+            # H3 video input transform is currently identity; fail closed if it changes.
+            caller_internal = _process_latent_in(base_model, latent_image, target_shapes)
+            caller_video, caller_audio = unpack_streams(latent_image, target_shapes)
+            caller_internal_video, _ = unpack_streams(caller_internal, target_shapes)
+            if not torch.equal(caller_video, caller_internal_video):
+                raise RuntimeError("native high temporal continuity requires identity VIDEO latent-in transform")
+            del caller_internal
+            high_latent_image = high_native_temporal_clean_latent(
+                latent_image, restored_clean, target_shapes, stage_plan.prefix_t
+            )
+            candidate_video, candidate_audio = unpack_streams(high_latent_image, target_shapes)
+            if (
+                not torch.equal(caller_audio, candidate_audio)
+                or not torch.equal(
+                    caller_video[:, :, : stage_plan.prefix_t], candidate_video[:, :, : stage_plan.prefix_t]
+                )
+                or not torch.equal(
+                    caller_video[:, :, stage_plan.prefix_t + 2 :], candidate_video[:, :, stage_plan.prefix_t + 2 :]
+                )
+            ):
+                raise RuntimeError("native high transition modified protected prefix, audio or untouched suffix")
         target_latent_internal = _process_latent_in(
             base_model,
-            latent_image,
+            high_latent_image,
             target_shapes,
         )
         target_noise = _noise_argument(
@@ -6378,6 +6425,17 @@ def run_partitioned_progressive(
             noise,
             denoise_mask,
         )
+        high_entry_error = None
+        if high_temporal_mode == HIGH_NATIVE_TEMPORAL_CONTINUITY_TWO_TOKEN:
+            high_entry_error = verify_high_native_temporal_entry(
+                target_raw,
+                target_noise,
+                target_latent_internal,
+                target_shapes,
+                stage_plan.prefix_t,
+                sigma,
+                float(getattr(base_model.model_sampling, "noise_scale", 1.0)),
+            )
         merged_video_noise, _merged_audio_noise = unpack_streams(
             target_noise,
             target_shapes,
@@ -6403,7 +6461,7 @@ def run_partitioned_progressive(
             high_prediction_gauge_bridge_support_tokens=(
                 bridge_support_tokens if high_prediction_gauge_bridge_enabled else 0
             ),
-            sampler_latent_mask_unchanged=True,
+            sampler_latent_mask_unchanged=high_temporal_mode == HIGH_NATIVE_TEMPORAL_CONTINUITY_OFF,
             sampler_entry_state_unchanged=True,
         )
 
@@ -6523,6 +6581,22 @@ def run_partitioned_progressive(
             binding.metrics,
             prefix_t=stage_plan.prefix_t,
         )
+        if high_temporal_mode == HIGH_NATIVE_TEMPORAL_CONTINUITY_TWO_TOKEN:
+            high_denoise_mask = high_native_temporal_mask(high_denoise_mask, target_shapes, stage_plan.prefix_t)
+            binding.metrics.event(
+                "partitioned_high_native_temporal_continuity",
+                policy=high_temporal_mode,
+                weights=[0.5, 0.75],
+                first_generated_token=int(stage_plan.prefix_t),
+                high_clean_operand="exact_restored_pre_high",
+                exact_prefix_modified=False,
+                audio_modified=False,
+                suffix_outside_transition_modified=False,
+                high_entry_state_reconstructed_against_new_clean=high_entry_error is not None,
+                high_entry_state_reconstruction_max_abs_error=high_entry_error,
+                extra_h3_nfe=0,
+                extra_vae_calls=0,
+            )
         if boundary_window_evidence is not None:
             high_video_mask, _ = unpack_streams(high_denoise_mask, target_shapes)
             boundary_window_evidence.capture("initial_high_video_mask", high_video_mask)
@@ -6562,7 +6636,7 @@ def run_partitioned_progressive(
         ):
             result = executor(
                 target_noise,
-                latent_image,
+                high_latent_image,
                 sampler,
                 high_sigmas,
                 high_denoise_mask,
