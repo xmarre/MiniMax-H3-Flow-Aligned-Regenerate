@@ -11,6 +11,12 @@ try:
     from .h3_flow_regenerate.decode_context import (
         NODE_DISPLAY_NAME_MAPPINGS as DECODE_NODE_DISPLAY_NAME_MAPPINGS,
     )
+    from .h3_flow_regenerate.first_high_counterfactual import (
+        NODE_CLASS_MAPPINGS as FIRST_HIGH_CF_NODE_CLASS_MAPPINGS,
+    )
+    from .h3_flow_regenerate.first_high_counterfactual import (
+        NODE_DISPLAY_NAME_MAPPINGS as FIRST_HIGH_CF_NODE_DISPLAY_NAME_MAPPINGS,
+    )
     from .h3_flow_regenerate.local_boundary_audit import (
         NODE_CLASS_MAPPINGS as LOCAL_AUDIT_NODE_CLASS_MAPPINGS,
     )
@@ -61,6 +67,12 @@ except ImportError:  # Direct-file import used by packaging and test smoke check
     from h3_flow_regenerate.decode_context import (
         NODE_DISPLAY_NAME_MAPPINGS as DECODE_NODE_DISPLAY_NAME_MAPPINGS,
     )
+    from h3_flow_regenerate.first_high_counterfactual import (
+        NODE_CLASS_MAPPINGS as FIRST_HIGH_CF_NODE_CLASS_MAPPINGS,
+    )
+    from h3_flow_regenerate.first_high_counterfactual import (
+        NODE_DISPLAY_NAME_MAPPINGS as FIRST_HIGH_CF_NODE_DISPLAY_NAME_MAPPINGS,
+    )
     from h3_flow_regenerate.local_boundary_audit import (
         NODE_CLASS_MAPPINGS as LOCAL_AUDIT_NODE_CLASS_MAPPINGS,
     )
@@ -102,6 +114,7 @@ except ImportError:  # Direct-file import used by packaging and test smoke check
 NODE_CLASS_MAPPINGS = {
     **PREFIX_AUDIT_NODE_CLASS_MAPPINGS,
     **LOCAL_AUDIT_NODE_CLASS_MAPPINGS,
+    **FIRST_HIGH_CF_NODE_CLASS_MAPPINGS,
     **LOW_AB_AUDIT_NODE_CLASS_MAPPINGS,
     **NATIVE_PREFIX_CF_NODE_CLASS_MAPPINGS,
     **AUDIO_AUDIT_NODE_CLASS_MAPPINGS,
@@ -113,6 +126,7 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     **PREFIX_AUDIT_NODE_DISPLAY_NAME_MAPPINGS,
     **LOCAL_AUDIT_NODE_DISPLAY_NAME_MAPPINGS,
+    **FIRST_HIGH_CF_NODE_DISPLAY_NAME_MAPPINGS,
     **LOW_AB_AUDIT_NODE_DISPLAY_NAME_MAPPINGS,
     **NATIVE_PREFIX_CF_NODE_DISPLAY_NAME_MAPPINGS,
     **AUDIO_AUDIT_NODE_DISPLAY_NAME_MAPPINGS,

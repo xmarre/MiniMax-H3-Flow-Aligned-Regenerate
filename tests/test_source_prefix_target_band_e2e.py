@@ -128,6 +128,9 @@ def test_target_band_reaches_generated_suffix_with_exact_prefix_and_audio(monkey
     assert projection[0]["policy"] == SOURCE_PREFIX_TARGET_BAND_POLICY
     assert projection[0]["carry_policy"] == "native_source_carry_v1"
     assert projection[0]["target_band"]["carry_to_target_band_rms"] > 0.0
+    signed_dc = projection[0]["target_band"]["signed_dc"]
+    assert signed_dc["status"] == "measured" and signed_dc["tokens"] == list(range(PROTECTED_T - 3, PROTECTED_T))
+    assert max(signed_dc["reconciled_minus_carried_rms"]) > 0.0
     assert projection[0]["extra_vae_decode_calls"] == projection[0]["extra_vae_encode_calls"] == 0
     resample = fixture._events(band.metrics, "partitioned_prefix_source_resample")
     assert resample[0]["policy"] == SOURCE_PREFIX_TARGET_BAND_POLICY

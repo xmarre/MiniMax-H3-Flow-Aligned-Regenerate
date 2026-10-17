@@ -65,6 +65,7 @@ from .high_stage_boundary import (
     HIGH_PREDICTION_GAUGE_BRIDGE_WEIGHTS,
     high_boundary_contract,
 )
+from .low_cfg_branch_dc import capture_low_cfg_branch_dc, low_cfg_branch_dc_receipt
 from .low_input_pairing import make_low_input_pairing_receipt
 from .partitioned_attention import (
     ATTENTION_BACKEND_HISTORY_KEY as PARTITIONED_ATTENTION_HISTORY_KEY,
@@ -213,6 +214,13 @@ from .seam_diagnostics import (
     recover_conditional_clean_for_diagnostics,
 )
 from .sigma import H3_VIDEO_SHIFT, normalized_coordinate
+from .signed_boundary_dc import (
+    SIGNED_BOUNDARY_DC_POLICY,
+    latent_preview_factors,
+    measure_signed_boundary_dc,
+    measure_signed_prefix_dc,
+    signed_boundary_dc_ledger,
+)
 from .source_prefix_carry import (
     SOURCE_PREFIX_CARRY_POLICY,
     reconcile_target_band,
@@ -3951,9 +3959,15 @@ def run_partitioned_progressive(
         projected_prefix_source = projected_prefix_source.to(low_video)
         prefix_projection_policy = SOURCE_PREFIX_CARRY_POLICY
         if source_carry.target_band:
+            carried_prefix_source = projected_prefix_source
             projected_prefix_source, band_receipt = reconcile_target_band(
                 projected_prefix_source, generic_prefix_source
             )
+            try:
+                band_receipt["signed_dc"] = measure_signed_prefix_dc(carried_prefix_source, projected_prefix_source)
+            except Exception as exc:  # diagnostics must never stop sampling
+                band_receipt["signed_dc"] = {"policy": SIGNED_BOUNDARY_DC_POLICY, "status": "error", "error": repr(exc)}
+            del carried_prefix_source
             prefix_projection_policy = band_receipt["policy"]
             prefix_projection_receipt.update(
                 policy=prefix_projection_policy,
@@ -4276,6 +4290,15 @@ def run_partitioned_progressive(
             sampler_shapes=target_shapes,
             video_view=lambda video: target_band_source_view(video, target_band),
         )
+    low_cfg_rows: list[dict[str, Any]] = []
+    cfg_counter_keys = tuple(
+        f"{prefix}_{stage}"
+        for stage in ("low", "probe")
+        for prefix in ("sampler_logical_calls", "transformer_actual_nfe", "spectrum_forecast_calls")
+    )
+    cfg_counters_before = {key: int(binding.metrics.counters.get(key, 0)) for key in cfg_counter_keys}
+    low_reference_video = unpack_streams(low_latent_image, low_shapes)[0]
+    low_latent_format = getattr(getattr(guider.model_patcher, "model", None), "latent_format", None)
     try:
         _reset_guider_conds(guider, template=conditioning_template)
         low_started = time.perf_counter()
@@ -4284,6 +4307,15 @@ def run_partitioned_progressive(
             binding.metrics.increment("progressive_sampler_invocations")
             domain_calls_before = _domain_uniform_counters(binding.metrics)
             with (
+                capture_low_cfg_branch_dc(
+                    model_options,
+                    low_shapes,
+                    stage_plan.prefix_t,
+                    low_reference_video,
+                    stage="low",
+                    rows=low_cfg_rows,
+                    latent_format=low_latent_format,
+                ),
                 _flow_stage_contract(guider, "low"),
                 _partitioned_stage_contract(
                     guider,
@@ -4331,6 +4363,15 @@ def run_partitioned_progressive(
             binding.metrics.increment("progressive_history_boundaries")
             domain_calls_before = _domain_uniform_counters(binding.metrics)
             with (
+                capture_low_cfg_branch_dc(
+                    model_options,
+                    low_shapes,
+                    stage_plan.prefix_t,
+                    low_reference_video,
+                    stage="probe",
+                    rows=low_cfg_rows,
+                    latent_format=low_latent_format,
+                ),
                 _flow_stage_contract(guider, "probe"),
                 _high_stage_contract(guider),
                 _partitioned_stage_contract(
@@ -4367,6 +4408,16 @@ def run_partitioned_progressive(
     except BaseException as exc:
         _finish_capture(binding, error=exc)
         raise
+    cfg_counter_deltas = {
+        key: (
+            int(binding.metrics.counters[key]) - cfg_counters_before[key] if key in binding.metrics.counters else None
+        )
+        for key in cfg_counter_keys
+    }
+    binding.metrics.event(
+        "partitioned_low_cfg_branch_dc",
+        **low_cfg_branch_dc_receipt(low_cfg_rows, counter_deltas=cfg_counter_deltas),
+    )
 
     committed_low_run = _finish_capture(binding)
     if low_input_pairing_requested:
@@ -4740,6 +4791,22 @@ def run_partitioned_progressive(
         # prefix output is discarded below in favor of the authoritative target
         # prefix captured before the low stage.
         clean_video, clean_audio = unpack_streams(source_x0, source_shapes)
+        signed_dc_receipts: dict[str, dict[str, Any]] = {}
+
+        def record_signed_dc(stage: str, video: torch.Tensor, domain: str, **fields: Any) -> None:
+            try:
+                receipt = measure_signed_boundary_dc(
+                    video,
+                    stage_plan.prefix_t,
+                    preview_factors=latent_preview_factors(getattr(base_model, "latent_format", None), video.shape[1]),
+                )
+            except Exception as exc:  # diagnostics must never stop sampling
+                receipt = {"policy": SIGNED_BOUNDARY_DC_POLICY, "status": "error", "error": repr(exc)}
+            receipt.update(stage=stage, domain=domain, **fields)
+            signed_dc_receipts[stage] = receipt
+            binding.metrics.event("partitioned_signed_boundary_dc", **receipt)
+
+        record_signed_dc("source_low_native", clean_video, "model_internal_clean")
         # Retain the clean low/probe audio only for output-neutral stage
         # diagnostics. Production target-high no longer consumes this witness.
         low_probe_clean_audio = clean_audio.detach().clone() if diagnostic_audio_control else None
@@ -4841,6 +4908,13 @@ def run_partitioned_progressive(
             clean_video = clean_video.clone()
             clean_video[:, :, : stage_plan.prefix_t] = exact_prefix_source
             source_x0 = pack_streams((clean_video, clean_audio))[0]
+
+        record_signed_dc(
+            "source_low_exact_context",
+            clean_video,
+            "model_internal_clean",
+            shadow_clean_selected=av_handoff_source == PARTITIONED_AV_HANDOFF_SOURCE_SHADOW,
+        )
 
         for roi_name, roi_fraction in (("upper45", 0.45), ("full", 1.0)):
             source_exact_trajectory = measure_translation_trajectory(
@@ -5333,6 +5407,7 @@ def run_partitioned_progressive(
                 raise RuntimeError("accepted frame-gauge transaction lost required clean-domain witnesses")
             learned_clean = frame_gauge_witnesses["learned_native"]
             provider_native_clean = learned_clean
+            record_signed_dc("provider_native", provider_native_clean, "model_internal_clean")
             if provider_boundary_stabilization != PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_OFF:
                 provider_boundary_stabilization_receipt["reason"] = "frame_gauge_selected"
             aligned_witness = frame_gauge_witnesses["paired_prefix_aligned_witness"]
@@ -5356,6 +5431,7 @@ def run_partitioned_progressive(
                 seed=diagnostic_seed,
             )
             provider_native_clean = learned_clean
+            record_signed_dc("provider_native", provider_native_clean, "model_internal_clean")
             if exact_overlap_fallback_requested:
                 learned_boundary_pair = frame_gauge_witnesses.get("learned_boundary_pair")
                 if learned_boundary_pair is None:
@@ -5374,6 +5450,7 @@ def run_partitioned_progressive(
                     learned_clean
                 )
                 provider_native_clean = learned_clean
+                record_signed_dc("provider_boundary_pair_replaced", provider_native_clean, "model_internal_clean")
 
                 if provider_boundary_stabilization == PARTITIONED_PROVIDER_BOUNDARY_STABILIZATION_SOFT:
                     # Hardware validation disproved the pre-high-only promotion gate: the same
@@ -5715,6 +5792,7 @@ def run_partitioned_progressive(
 
         restored_clean = corrected_clean.clone()
         restored_clean[:, :, : stage_plan.prefix_t] = exact_prefix.to(restored_clean)
+        record_signed_dc("pre_high_exact_restored", restored_clean, "model_internal_clean")
 
         if boundary_window_evidence is not None and uniform_source:
             boundary_window_evidence.capture("provider_native_clean", provider_native_clean)
@@ -7040,6 +7118,12 @@ def run_partitioned_progressive(
                 high_stage_audio_mask_unchanged=True,
             )
         boundary = measure_video_boundary(final_video, stage_plan.prefix_t)
+        record_signed_dc("final", final_video, "caller_output_latent")
+        try:
+            signed_dc_ledger = signed_boundary_dc_ledger(signed_dc_receipts)
+        except Exception as exc:  # diagnostics must never stop sampling
+            signed_dc_ledger = {"policy": SIGNED_BOUNDARY_DC_POLICY, "status": "error", "error": repr(exc)}
+        binding.metrics.event("partitioned_signed_boundary_dc_ledger", **signed_dc_ledger)
         if target_band is not None:
             _emit_target_band_tail_boundary(
                 binding.metrics,

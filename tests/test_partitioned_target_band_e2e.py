@@ -240,7 +240,20 @@ def _harness(
             class_obj = guider
 
             def __call__(self, x, timestep, model_options, seed):
-                return core(x, float(timestep.reshape(-1)[0]), shapes, mask_packed)
+                denoised = core(x, float(timestep.reshape(-1)[0]), shapes, mask_packed)
+                for function in model_options.get("sampler_post_cfg_function", []):
+                    denoised = function(
+                        {
+                            "denoised": denoised,
+                            "cond_denoised": denoised,
+                            "uncond_denoised": None,
+                            "cond_scale": 1.0,
+                            "sigma": timestep,
+                            "input": x,
+                            "model_options": model_options,
+                        }
+                    )
+                return denoised
 
         return flow_predict_wrapper(Predict(), x, torch.tensor([float(sigma)]), guider.model_options, 5)
 
@@ -1705,3 +1718,63 @@ def test_uniform_coupled_entry_retains_measured_residual_without_frame_gauge(mon
     original, _ = unpack_streams(run.latent_image, run.shapes)
     assert torch.equal(video[:, :, :PROTECTED_T], original[:, :, :PROTECTED_T])
     assert run.binding.active_capture is None
+
+
+def test_signed_boundary_dc_receipts_attribute_the_seam_without_changing_output(monkeypatch):
+    import contextlib
+
+    import h3_flow_regenerate.partitioned_scheduler as scheduler
+
+    stages = ("source_low_native", "source_low_exact_context", "provider_native", "pre_high_exact_restored", "final")
+    run = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE)
+    receipts = {event["stage"]: event for event in _events(run.metrics, "partitioned_signed_boundary_dc")}
+    assert tuple(receipts) == stages
+    assert all(receipt["status"] == "measured" for receipt in receipts.values())
+    assert receipts["source_low_native"]["grid_hw"] == list(SOURCE_HW)
+    assert receipts["source_low_exact_context"]["shadow_clean_selected"] is False
+    assert receipts["final"]["grid_hw"] == list(TARGET_HW)
+    transfer = _events(run.metrics, "partitioned_transfer")[0]
+    complete = _events(run.metrics, "partitioned_exact_prefix_complete")[0]
+    for stage, expected in (
+        ("provider_native", transfer["upscaler_native_seam_spatial_mean_rms"]),
+        ("pre_high_exact_restored", transfer["corrected_exact_seam_spatial_mean_rms"]),
+        ("final", complete["final_seam_spatial_mean_rms"]),
+    ):
+        assert receipts[stage]["boundary_step_rms"] == pytest.approx(expected, rel=1e-4, abs=1e-6)
+    (ledger,) = _events(run.metrics, "partitioned_signed_boundary_dc_ledger")
+    assert ledger["status"] == "complete" and tuple(ledger["stages"]) == stages
+    total = sum(row["signed_contribution_to_final_norm"] for row in ledger["components"].values())
+    assert total == pytest.approx(ledger["final_step_norm"], rel=1e-5, abs=1e-7)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("instrumentation failure")
+
+    monkeypatch.setattr(scheduler, "measure_signed_boundary_dc", broken)
+    failing = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE)
+    assert torch.equal(failing.result, run.result)
+    failed = _events(failing.metrics, "partitioned_signed_boundary_dc")
+    assert {receipt["status"] for receipt in failed} == {"error"}
+    assert _events(failing.metrics, "partitioned_signed_boundary_dc_ledger")[0]["status"] == "incomplete"
+
+    (cfg_receipt,) = _events(run.metrics, "partitioned_low_cfg_branch_dc")
+    assert cfg_receipt["status"] == "measured" and cfg_receipt["failed_evaluations"] == 0
+    assert {row["stage"] for row in cfg_receipt["rows"]} == {"low", "probe"}
+    assert all(row["tokens"] == [PROTECTED_T - 1, PROTECTED_T, PROTECTED_T + 1] for row in cfg_receipt["rows"])
+    assert cfg_receipt["uncond_candidate_rows"] == 0
+    assert cfg_receipt["uncond_verified_evaluations"] is None
+    for stage in ("low", "probe"):
+        assert cfg_receipt["stage_counts"][stage]["cfg_hook_observations"] > 0
+    probe = [row for row in cfg_receipt["rows"] if row["stage"] == "probe"][-1]
+    torch.testing.assert_close(
+        torch.tensor(probe["guided"]["anchored_step"]),
+        torch.tensor(receipts["source_low_native"]["boundary_step"]),
+        atol=1e-5,
+        rtol=0,
+    )
+    assert "sampler_post_cfg_function" not in run.guider.model_options
+
+    monkeypatch.setattr(scheduler, "measure_signed_boundary_dc", lambda *args, **kwargs: {})
+    monkeypatch.setattr(scheduler, "signed_boundary_dc_ledger", lambda receipts: {})
+    monkeypatch.setattr(scheduler, "capture_low_cfg_branch_dc", lambda *args, **kwargs: contextlib.nullcontext())
+    control = _harness(monkeypatch, spatial_stage_control=PARTITIONED_SPATIAL_STAGE_UNIFORM_SOURCE)
+    assert torch.equal(control.result, run.result)
