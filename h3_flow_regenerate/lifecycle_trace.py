@@ -663,7 +663,8 @@ class ComfyLifecycleHooks:
                                     out["host_pressure_delta"] = {
                                         key: host_after[key] - previous
                                         for key, previous in host_before.items()
-                                        if key in host_after and key.endswith(("faults", "pswpin", "pswpout", "pgmajfault"))
+                                        if key in host_after
+                                        and key.endswith(("faults", "pswpin", "pswpout", "pgmajfault"))
                                     }
                         after = _loaded_bytes(patcher) if patcher is not None else None
                         if before is not None and after is not None:
