@@ -128,6 +128,43 @@ def _reset_cuda_peaks() -> bool:
     return True
 
 
+
+def host_pressure_probe() -> dict[str, int] | None:
+    """Read bounded Linux paging evidence without a CUDA call or GPU sync.
+
+    Process faults are process-wide; /proc/vmstat swap and fault counters are
+    system-wide. Neither metric on its own proves that *this model* paged.
+    """
+    if sys.platform != "linux":
+        return None
+    stats: dict[str, int] = {}
+    try:
+        import resource
+
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        stats["process_minor_faults"] = int(usage.ru_minflt)
+        stats["process_major_faults"] = int(usage.ru_majflt)
+    except (ImportError, OSError, ValueError):
+        pass
+    try:
+        with open("/proc/vmstat", encoding="ascii") as handle:
+            for line in handle:
+                key, _, value = line.partition(" ")
+                if key in {"pswpin", "pswpout", "pgmajfault"}:
+                    stats["system_" + key] = int(value.strip())
+    except (OSError, ValueError):
+        pass
+    try:
+        with open("/proc/meminfo", encoding="ascii") as handle:
+            for line in handle:
+                key, _, value = line.partition(":")
+                if key in {"MemAvailable", "SwapFree"}:
+                    stats[key.lower() + "_kib"] = int(value.strip().split()[0])
+    except (OSError, ValueError, IndexError):
+        pass
+    return stats or None
+
+
 class _NvmlUtilization(ctypes.Structure):
     _fields_ = [("gpu", ctypes.c_uint), ("memory", ctypes.c_uint)]
 
@@ -614,7 +651,20 @@ class ComfyLifecycleHooks:
                                 fields[key] = int(bound[key])
                     fields["direction"] = direction
                     with trace.span(name, "model_residency", fields=fields) as out:
-                        result = original(self_, *args, **kwargs)
+                        host_before = host_pressure_probe() if name == "model.load" else None
+                        try:
+                            result = original(self_, *args, **kwargs)
+                        finally:
+                            if host_before is not None:
+                                host_after = host_pressure_probe()
+                                out["host_pressure_before"] = host_before
+                                if host_after is not None:
+                                    out["host_pressure_after"] = host_after
+                                    out["host_pressure_delta"] = {
+                                        key: host_after[key] - previous
+                                        for key, previous in host_before.items()
+                                        if key in host_after and key.endswith(("faults", "pswpin", "pswpout", "pgmajfault"))
+                                    }
                         after = _loaded_bytes(patcher) if patcher is not None else None
                         if before is not None and after is not None:
                             out["loaded_bytes_before"] = before

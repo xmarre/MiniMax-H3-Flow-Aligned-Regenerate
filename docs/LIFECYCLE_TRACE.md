@@ -22,7 +22,7 @@ One JSON file is written when each prompt finishes.
 |---|---|
 | `comfy.prompt`, `comfy.node` | `PromptExecutor.execute_async`, `execution.execute` |
 | `model_management.load_models_gpu`, `.free_memory`, `.soft_empty_cache` | `comfy.model_management` |
-| `model.load`, `model.unload`, `model.use_more_vram` | `LoadedModel`; records model class and bytes moved |
+| `model.load`, `model.unload`, `model.use_more_vram` | `LoadedModel`; records model class and bytes moved. Linux `model.load` also captures process major/minor faults and host-wide VM swap counters before/after weight restoration. |
 | `text_encoder.*` | `CLIP.encode_from_tokens[_scheduled]` |
 | `vae.*` | `VAE.decode/encode[_tiled]` |
 | `sampler.cfg_guider_sample` | `CFGGuider.sample` (also used by Continuum chunks) |
@@ -63,7 +63,14 @@ individual kernels.
   orchestration).
 * **Model load / offload** lists every full or partial residency change with
   bytes moved and effective GiB/s, and whether it happened inside a sampler
-  (memory admission) or elsewhere.
+  (memory admission) or elsewhere. On Linux/WSL, raw `model.load.fields`
+  include `host_pressure_before`, `host_pressure_after` and
+  `host_pressure_delta`: process-wide major/minor page faults and host-wide
+  `pswpin`, `pswpout`, `pgmajfault` (4-KiB pages or kernel-defined units).
+  `memavailable_kib` and `swapfree_kib` are endpoint snapshots, **not**
+  cumulative deltas. These counters correlate a slow H2D load with paging,
+  but system-wide changes cannot prove this process caused the activity.
+  They do not require CUDA synchronization or change memory policy.
 * **Flow stages** turns Flow's `low_stage_wall`, `handoff_probe_wall`,
   `handoff_transfer_wall` and `high_stage_wall` events into stage rows with
   the interval's peak allocated/reserved bytes (peak counters are reset at
