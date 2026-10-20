@@ -280,5 +280,7 @@ def test_audio_latent_boundary_measurement_uses_original_exact_mask_not_guided_m
 
     assert exact_report["audio_prefix_ticks"] == 6
     assert exact_report["available"] is True
-    with pytest.raises(ValueError, match="contiguous exact audio prefix"):
-        measure_audio_latent_boundary(packed, shapes, guided_mask, windows=(4,))
+    guided_report = measure_audio_latent_boundary(packed, shapes, guided_mask, windows=(4,))
+    assert guided_report["available"] is False
+    assert guided_report["reason"] == "unsupported_exact_audio_mask"
+    assert guided_report["windows"] == {}
