@@ -102,10 +102,10 @@ def measure_audio_latent_boundary(
         prefix += 1
     report["audio_prefix_ticks"] = prefix
     if prefix <= 0 or not bool(exact_one[prefix:].all().item()):
-        raise ValueError(
-            "audio latent boundary diagnostics require a contiguous exact audio prefix "
-            "followed by a fully generated suffix"
-        )
+        # An unsupported mask layout makes this diagnostic unavailable; it does
+        # not invalidate the already sampled AV latent.
+        report["reason"] = "unsupported_exact_audio_mask"
+        return report
 
     audio = latent_audio.detach().to(dtype=torch.float32)
     for requested in windows:
@@ -166,11 +166,27 @@ def compare_audio_latent_stages(
     exact_zero = temporal_max <= 1e-8
     exact_one = temporal_min >= 1.0 - 1e-8
     temporal = int(reference_audio.shape[-1])
+    # This comparison is strictly diagnostic. Some valid conditioning layouts
+    # own all audio ticks (or none), so there is no boundary to compare. A
+    # skipped report must not invalidate an already completed high-stage sample.
     prefix = 0
     while prefix < temporal and bool(exact_zero[prefix].item()):
         prefix += 1
-    if prefix <= 0 or prefix >= temporal or not bool(exact_one[prefix:].all().item()):
-        raise ValueError("audio stage comparison requires a contiguous exact prefix followed by generated suffix")
+    reason = None
+    if bool(exact_one.all().item()):
+        reason = "no_exact_audio_prefix"
+    elif bool(exact_zero.all().item()):
+        reason = "no_generated_audio_suffix"
+    elif prefix <= 0 or prefix >= temporal or not bool(exact_one[prefix:].all().item()):
+        reason = "unsupported_exact_audio_mask"
+    if reason is not None:
+        return {
+            "available": False,
+            "reason": reason,
+            "audio_prefix_ticks": prefix,
+            "audio_total_ticks": temporal,
+            "windows": {},
+        }
 
     reference = reference_audio.detach().to(dtype=torch.float32)
     candidate = candidate_audio.detach().to(device=reference.device, dtype=torch.float32)
