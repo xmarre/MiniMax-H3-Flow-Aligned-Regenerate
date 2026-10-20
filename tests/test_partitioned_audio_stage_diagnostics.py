@@ -34,13 +34,39 @@ def test_audio_stage_delta_reports_exact_prefix_and_generated_channel_changes():
     assert window["per_channel_candidate_over_reference_db"] == pytest.approx([6.0205999] * 4)
 
 
-def test_audio_stage_delta_rejects_noncanonical_mask():
+@pytest.mark.parametrize(
+    ("prefix", "reason"),
+    [
+        (0, "no_exact_audio_prefix"),
+        (10, "no_generated_audio_suffix"),
+    ],
+)
+def test_audio_stage_delta_skips_valid_audio_without_continuation_boundary(prefix, reason):
+    reference = torch.ones(1, 4, 2, 10)
+    candidate = reference.clone()
+    candidate[..., 2:] *= 2
+    before = candidate.clone()
+    report = compare_audio_latent_stages(reference, candidate, _audio_mask(prefix=prefix))
+    assert report == {
+        "available": False,
+        "reason": reason,
+        "audio_prefix_ticks": prefix,
+        "audio_total_ticks": 10,
+        "windows": {},
+    }
+    assert torch.equal(candidate, before)
+
+
+def test_audio_stage_delta_skips_noncanonical_mask_without_invalidating_sample():
     reference = torch.zeros(1, 4, 2, 10)
     candidate = reference.clone()
     mask = _audio_mask()
     mask[..., 8] = 0.5
-    with pytest.raises(ValueError, match="contiguous exact prefix"):
-        compare_audio_latent_stages(reference, candidate, mask)
+    report = compare_audio_latent_stages(reference, candidate, mask)
+    assert report["available"] is False
+    assert report["reason"] == "unsupported_exact_audio_mask"
+    assert report["audio_prefix_ticks"] == 6
+    assert report["windows"] == {}
 
 
 def test_sampler_overlap_mask_does_not_replace_exact_boundary_diagnostic_mask():
