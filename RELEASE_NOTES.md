@@ -1,3 +1,16 @@
+# MiniMax H3 Flow-Aligned Regenerate v0.3.15
+
+## Preserve completed samples when audio diagnostics are inapplicable
+
+- **PR #110** changes optional audio stage comparisons to produce unavailable/unsupported receipts when an exact-prefix/generated-suffix boundary does not exist. This covers all-generated, all-protected and noncanonical guided audio masks.
+- The protected source-carrier audio audit checks exact preservation only when the mask actually protects audio; absent protection is reported rather than treated as a fatal error. Actual protected-byte corruption, mask/tensor shape mismatch and non-finite model output still fail.
+- Optional successor audio bridging leaves the audio tensor unchanged when there is no representable canonical boundary. Canonical protected-prefix bridge and ordinary low/probe/high sampling stay unchanged.
+- CPU regression and exact-head CI cover degenerate mask layouts and unchanged audio bytes. No matched installed-GPU quality or recovery-speed guarantee is claimed. Other sampler and architecture experiments remain excluded.
+
+Related Continuum Plus v3.5.0 supplies Timeline Studio v26 and independently selectable/generated/locked audio. VDN-H3-Plus v1.5.11 mitigates transient high-grid memory pressure. Sol-H3 v0.1.11, Spectrum MiniMax H3 v0.2.29 and Latent Upscaler-Plus v0.2.2 remain compatible and unchanged.
+
+---
+
 # MiniMax H3 Flow-Aligned Regenerate v0.3.14
 
 ## Integrated changes

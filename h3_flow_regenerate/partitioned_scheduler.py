@@ -591,6 +591,34 @@ def _resolve_audio_diagnostic_masks(
     return diagnostic_target_mask, diagnostic_low_mask
 
 
+def _audit_source_carrier_audio_prefix(
+    final_audio: torch.Tensor,
+    original_audio: torch.Tensor,
+    audio_mask: torch.Tensor,
+) -> dict[str, Any]:
+    """Observe protected audio, without requiring it for all-generated output."""
+    if audio_mask.shape != final_audio.shape or final_audio.shape != original_audio.shape:
+        raise RuntimeError("source-carrier audio-position integrity audit lost audio/mask geometry")
+    protected_audio = audio_mask == 0
+    if not bool(protected_audio.any().item()):
+        return dict(
+            protected_audio_prefix_available=False,
+            final_exact_audio_prefix=None,
+            audio_integrity_reason="no_protected_carried_audio",
+        )
+    audio_exact = final_audio.dtype == original_audio.dtype and torch.equal(
+        final_audio[protected_audio],
+        original_audio.to(device=final_audio.device)[protected_audio],
+    )
+    if not audio_exact:
+        raise RuntimeError("source-carrier audio-position candidate violated exact carried-audio restoration")
+    return dict(
+        protected_audio_prefix_available=True,
+        final_exact_audio_prefix=True,
+        audio_integrity_reason="protected_audio_verified",
+    )
+
+
 def _partitioned_high_video_overlap_mask(
     runtime_mask: torch.Tensor,
     exact_mask: torch.Tensor | None,
@@ -7016,22 +7044,14 @@ def run_partitioned_progressive(
             if tensor_sha256(denoise_mask) != candidate_high_mask_digest:
                 raise RuntimeError("source-carrier audio-position candidate mutated the high-stage sampler mask")
             _mask_video, audio_mask = unpack_streams(denoise_mask, target_shapes)
-            protected_audio = audio_mask == 0
-            if not bool(protected_audio.any().item()):
-                raise RuntimeError("source-carrier audio-position candidate found no protected carried-audio prefix")
-            audio_exact = final_audio.dtype == original_audio.dtype and torch.equal(
-                final_audio[protected_audio],
-                original_audio.to(device=final_audio.device)[protected_audio],
-            )
-            if not audio_exact:
-                raise RuntimeError("source-carrier audio-position candidate violated exact carried-audio restoration")
+            audio_integrity = _audit_source_carrier_audio_prefix(final_audio, original_audio, audio_mask)
             binding.metrics.event(
                 "partitioned_audio_position_candidate_integrity",
                 mode=audio_position_domain,
                 low_mask_digest=candidate_low_mask_digest,
                 high_mask_digest=candidate_high_mask_digest,
                 final_exact_video_prefix=True,
-                final_exact_audio_prefix=True,
+                **audio_integrity,
                 sampler_masks_unchanged=True,
                 source_sampler_masks_unchanged=True,
                 high_stage_guard_mask_local_override=False,

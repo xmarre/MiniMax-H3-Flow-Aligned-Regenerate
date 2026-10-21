@@ -1,3 +1,16 @@
+## Coordinated companion versions — 21 October 2026
+
+| Component | Version | Relevant changes |
+| --- | --- | --- |
+| Flow-Aligned Regenerate | v0.3.15 | #110 — nonfatal inapplicable audio diagnostics |
+| H3 Continuum Plus | v3.5.0 | #51 — Timeline Studio v26 |
+| VDN-H3-Plus | v1.5.11 | #46 and #47 — bounded native frame statistics and post-forward LoRA memory |
+| Sol-H3 | v0.1.11 | Unchanged |
+| Spectrum MiniMax H3 | v0.2.29 | Unchanged |
+| Latent Upscaler-Plus | v0.2.2 | Unchanged |
+
+These components form the tested implementation family for native H3 progressive continuation. GitHub/Comfy Registry publication is governed independently by each repository's release workflows. Passing structural tests and owner generations does not guarantee numerical parity for different CUDA GEMM shapes or eliminate all OOM and boundary-quality regressions. Keyless work and experimental overlays are excluded.
+
 ## Coordinated companion versions — 17 October 2026
 
 | Component | Release | Included PRs |
